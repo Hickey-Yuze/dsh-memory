@@ -1,0 +1,14 @@
+# dsh-memory bundle layer: mounts the memory plugin as one loader row.
+# Installed via the profile package.json (file: dependency) + dsh.profile.bundles.
+# Runtime tuning goes through the settings page (persisted to <dataDir>/config.json)
+# or a top-level patch entry targeting id `dsh-memory` (key-replace semantics),
+# e.g. in ~/.dsh/profiles/desktop/cordis.patch.yml:
+#   - id: dsh-memory
+#     name: dsh-memory
+#     config:
+#       recall:
+#         maxResults: 5
+- insert:
+    - id: dsh-memory
+      name: 'dsh-memory'
+      config: {}
