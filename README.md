@@ -2,6 +2,8 @@
 
 **DeepSeek Harness 的分层蒸馏长期记忆插件（精简自研版，架构对齐 [dsh-layered-memory](https://github.com/JunNanLYS/dsh-layered-memory)）。**
 
+> 📖 **日常使用请看 [GUIDE.md](GUIDE.md)**——设置页各名词的含义、输入栏记忆芯片的档位与数据流详解、常见问题。
+
 对话在后台自动完成 **L0 捕获 → L1 原子记忆 → L2 场景整合 → L3 画像蒸馏**，模型每轮回答前自动注入相关记忆；提供记忆检索工具与五区记忆工作台。零原生依赖、零外部服务，蒸馏复用宿主自己的 LLM。
 
 ## 工作原理
