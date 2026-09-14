@@ -144,6 +144,10 @@ test('client.js 语法有效（ModuleLoader 工厂结构）', () => {
   assert.match(source, /window\.__ModuleLoader__\.load\(/);
   assert.match(source, /id: "dsh-memory"/);
   assert.match(source, /exports\.apply/);
+  // 两处 slot 注册：设置页工作台 + 输入栏会话记忆档位芯片
+  assert.match(source, /"settings\.section"/);
+  assert.match(source, /"conversation\.input\.left"/);
+  assert.match(source, /id: "dsh-memory-mode"/);
   // 禁 JSX / TypeScript 语法 sanity：不应含 <[A-Z] 的 JSX 元素开头
   assert.ok(!/<[A-Z][a-zA-Z]*\s/.test(source.replace(/\/\/[^\n]*/g, '')));
 });

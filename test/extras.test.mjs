@@ -71,6 +71,24 @@ test('modes：默认档跟随 config.family，set 写穿持久化，90 天过期
   events = [];
   modes2.set('s1', 'off'); // 同档不触发
   assert.equal(events.length, 0);
+  // 清除档位覆盖（clearMode）：回默认档、保留注入覆盖、off 恢复走回调
+  events = [];
+  modes2.setRecall('s1', false); // 重新设置注入覆盖，验证 clearMode 保留它
+  modes2.clearMode('s1'); // off → 默认档 'auto'
+  assert.equal(modes2.get('s1'), 'auto');
+  assert.equal(modes2.getRecall('s1'), false); // 注入覆盖保留
+  assert.equal(modes2.getResume('s1'), null); // 恢复即清空
+  assert.deepEqual(events, [['s1', 'off', 'auto']]);
+  events = [];
+  modes2.clearMode('s1'); // 已无档位覆盖 → no-op 不触发
+  assert.equal(events.length, 0);
+  // 仅 recall 覆盖（无档位覆盖）落盘后重载不丢，mode 跟随全局
+  modes2.flush();
+  const modes3 = createSessionModes(dir, { getDefaultMode: () => family, log: silentLog() });
+  assert.equal(modes3.getRecall('s1'), false);
+  assert.equal(modes3.get('s1'), 'auto');
+  modes3.set('s1', 'chat');
+  assert.equal(modes3.getRecall('s1'), false); // 再设档位不影响注入覆盖
 });
 
 // ============ 蒸馏回退链 ============
@@ -306,6 +324,10 @@ test('routes：sessions 列表/设置 + insights 粒度聚合', async (t) => {
   assert.equal(set1.ok, true);
   assert.equal(modes.get('sess-alpha'), 'work');
   await postJson('/api-memory/sessions', { sid: 'sess-alpha', recall: false });
+  assert.equal(modes.getRecall('sess-alpha'), false);
+  // mode null = 清除档位覆盖跟随全局（注入覆盖保留）
+  await postJson('/api-memory/sessions', { sid: 'sess-alpha', mode: null });
+  assert.equal(modes.get('sess-alpha'), 'auto');
   assert.equal(modes.getRecall('sess-alpha'), false);
   const set3 = await postJson('/api-memory/sessions', { sid: 'x', mode: 'bogus' });
   assert.equal(set3.ok, false); // 非法档位 400
