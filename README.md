@@ -131,27 +131,6 @@ npm test        # 50 项：存储（分族）/ 检索（hybrid）/ 配置（路�
 测试经 `test/stub-bundles.mjs` loader hooks 把 `@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-tools` 桩掉，
 全模块图可在裸 Node 运行；`@deepseek-ai/*` 的真实 import 只存在于 `lib/host.js` 一处。
 
-## 与 dsh-layered-memory 的差异
-
-**本轮补全后仍保留的差异化设计**（精简版定位，零原生依赖）：
-
-- 纯 JSONL/JSON 存储，无 SQLite / jieba FTS（关键词「精度×覆盖」评分 + 时效衰减足够个人库规模；检索接口保持单一 `search.js` 缝，后续可平替）；
-- 向量检索仅支持远程 OpenAI 兼容嵌入源；**本地 ONNX 嵌入运行时**（按需安装 transformers.js + sha256 锁定的模型目录 + worker 线程推理）未实现——重依赖子系统，个人库规模下远程源或纯关键词已足够；
-- 无 TUI 形态适配（`/memory` 命令、状态行）——本插件面向 desktop/web profile，TUI 宿主请用原版；
-- L1 去重合并进抽取调用（相似候选池 + existing_id 合并），省一次 LLM 往返（原版为独立去重调用）；
-- 五区工作台为自绘轻量实现（无图表库，SVG 折线/柱图）；
-- 无 `scene_name` 情境切分与 `type/priority` 类型体系（Prompt 为精简版原子记忆抽取），L2 场景整合承担原版情境链的汇总职责。
-
-**已对齐原版的能力**：
-
-- 记忆档位（auto/chat/work/off）+ 会话数据流（只写/读写/暂停）+ 暂停恢复快照，写入与召回同档；
-- L1/L2/L3 分族隔离（族三级兜底链、去重永不跨族、分族水位、分族画像/场景）；
-- 召回去重持久化（LRU/过期/压缩重置）、召回读侧三闸门（总开关 → off 档 → 会话覆盖）；
-- 蒸馏回退链（空输出判失败、逐次尝试记账）+ 按层路由链；
-- 成本看板（窗口/粒度/层级筛选、分模型趋势、均值/中位数、失败明细）；
-- 远程嵌入源 + hybrid RRF 检索（换源失效、差量重嵌、失败降级、熔断）；
-- agent 作用域稳定区（agents 服务缺席退化全局合并区）、档位切换切片落袋、L1 输入超限分块抽取。
-
 ## License
 
 MIT
