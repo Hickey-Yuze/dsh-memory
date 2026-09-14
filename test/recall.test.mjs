@@ -61,6 +61,25 @@ test('单条截断 + 整轮预算截断', async () => {
   assert.ok(text.length <= 400);
 });
 
+test('位置线索：指针型记忆注入时附带先读文件行动提示；无线索不附', async () => {
+  // 真机教训：模型记住知识库位置却不读内容，最后编数据
+  const pointerRecords = [
+    { id: 'kb1', content: '用户的知识库位于 C:\\Users\\华硕\\Desktop\\Yuze\\knowledge，用户明确要求记住该路径', updatedAt: NOW, hits: 0 },
+    { id: 'm1', content: '用户偏好使用 pnpm 管理依赖', updatedAt: NOW, hits: 0 },
+  ];
+  const { recall } = makeRecall(pointerRecords);
+  const text = await recall.recallText('s1', '我想用知识库查点东西');
+  assert.match(text, /知识库/);
+  assert.match(text, /位置≠内容/);
+  assert.match(text, /先用文件工具/);
+  assert.ok(text.lastIndexOf('先用文件工具') < text.lastIndexOf('</recalled-memory>')); // 提示在块内末尾
+  // 无位置线索的普通记忆：不附提示
+  const { recall: plain } = makeRecall(RECORDS);
+  const normal = await plain.recallText('s2', 'pnpm 部署流程');
+  assert.ok(normal.includes('<recalled-memory>'));
+  assert.ok(!normal.includes('位置≠内容'));
+});
+
 test('会话内去重：同一条记忆不重复注入；压缩后重置', async () => {
   const { recall } = makeRecall(RECORDS);
   const first = await recall.recallText('s1', 'pnpm 部署流程');
