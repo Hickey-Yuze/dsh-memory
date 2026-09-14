@@ -48,10 +48,14 @@ test('真实 import host.js + 桩 ctx 全链路接线', async (t) => {
     llm: { stream: async function* () {}, listProviders: () => [{ id: 'p' }], listModels: async () => [{ id: 'm' }] },
     tools: { register: () => () => {} },
     webServer: { register: (route) => { registeredRoutes.push(route.path); return () => {}; } },
-    systemPrompt: { section: (s) => registeredSections.push(s.name) && (() => {}) },
+    agents: { list: () => [fakeAgent] },
+  };
+  const agentSections = [];
+  const fakeAgent = {
+    id: 'agent-smoke',
+    ctx: { systemPrompt: { context: (s) => { agentSections.push(s); return () => {}; } } },
   };
   const registeredRoutes = [];
-  const registeredSections = [];
   const effectDisposers = [];
   const ctx = {
     on(event, handler) {
@@ -74,7 +78,7 @@ test('真实 import host.js + 桩 ctx 全链路接线', async (t) => {
   const dispose = host.apply(ctx, {});
   assert.ok(listeners.get('session/event').length >= 2); // 捕获 + 压缩重置
   assert.equal(listeners.has('agent/pre-step'), true);
-  assert.equal(injectedCallbacks.length, 4); // llm / tools / webServer / systemPrompt
+  assert.equal(injectedCallbacks.length, 3); // llm / tools / webServer（稳定区走 agent 作用域，不再全局注入）
 
   // 逐个触发注入回调（模拟服务就绪）；effect 工厂立即执行以完成注册
   for (const { deps, cb } of injectedCallbacks) {
@@ -89,8 +93,12 @@ test('真实 import host.js + 桩 ctx 全链路接线', async (t) => {
     cb(scope);
   }
   assert.ok(registeredRoutes.includes('/api-memory/health'));
-  assert.ok(registeredSections.includes('dsh-memory:persona'));
-  assert.ok(registeredSections.includes('dsh-memory:scene-nav'));
+  // 主 ctx 的 effect（稳定区 agent 作用域注册 / 嵌入调度）
+  for (const fn of effects.splice(0)) {
+    const d = fn();
+    if (typeof d === 'function') effectDisposers.push(d);
+  }
+  assert.ok(agentSections.some((s) => s.name === 'dsh-memory:profile')); // agent 作用域稳定区
 
   // —— 捕获：user / assistant 消息 → L0 落盘 ——
   const session = { id: 'session-smoke', header: { cwd: '/tmp/ws' } };
@@ -120,10 +128,9 @@ test('真实 import host.js + 桩 ctx 全链路接线', async (t) => {
   const laterStep = await listeners.get('agent/pre-step')[0]({ agent, step: 2, signal }, nextFor('pnpm 的偏好是什么'));
   assert.equal(laterStep.messages.length, 1);
 
-  // —— systemPrompt 稳定区动态文本 ——
-  const personaSection = { text: () => '' };
-  // 直接验证注册的 section 闭包可用（空库 persona 文本为空）
-  assert.equal(registeredSections.length, 2);
+  // —— systemPrompt 稳定区：agent 作用域注册的动态文本函数可用 ——
+  const profileSection = agentSections.find((s) => s.name === 'dsh-memory:profile');
+  assert.equal(typeof profileSection.text(), 'string'); // 空库画像文本为空串，不抛错
 
   // —— 卸载可逆 ——
   for (const d of effectDisposers.reverse()) {

@@ -1,8 +1,13 @@
-// 召回单测：命中格式 / 预算截断 / 会话内去重 / 超时跳过 / 最后一条用户消息定位。
+// 召回单测：命中格式 / 预算截断 / 会话内去重（持久化）/ 超时跳过 / 最后一条用户消息定位
+// / 档位门控（off 隐身、只写覆盖）/ 分族过滤 / hybrid 检索。
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createRecall } from '../lib/recall.js';
+import { createRecallDedupe } from '../lib/recall-dedupe.js';
 import { createConfig } from '../lib/config.js';
 
 function silentLog() {
@@ -12,19 +17,23 @@ function silentLog() {
 const NOW = Date.now();
 function fakeStore(records, opts = {}) {
   return {
-    getRecords: opts.getRecords || (() => records.map((r) => ({ ...r }))),
+    getRecords: opts.getRecords || ((family) => records.filter((r) => !family || r.family === family || !r.family && family === 'chat').map((r) => ({ ...r }))),
     getRecord: (id) => records.find((r) => r.id === id) || null,
     getState: () => ({ stats: {} }),
     saveState() {},
   };
 }
 
-function makeRecall(records, yaml = {}, storeOverride = null) {
+function makeRecall(records, yaml = {}, storeOverride = null, extras = {}) {
   const config = createConfig(yaml, null);
   const store = storeOverride || fakeStore(records);
   const log = silentLog();
-  const recall = createRecall({ store, config, log });
-  return { recall, config, store, log };
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-recall-'));
+  const dedupe = createRecallDedupe(dir, log);
+  const modes = extras.modes || null;
+  const embedding = extras.embedding || null;
+  const recall = createRecall({ store, config, log, modes, embedding, dedupe });
+  return { recall, config, store, log, dedupe, dir };
 }
 
 const RECORDS = [
@@ -76,6 +85,57 @@ test('超时跳过：绝不阻塞（预算内未完成返回空串）', async ()
   const text = await recall.recallText('s1', 'pnpm 部署');
   assert.ok(Date.now() - started < 1000);
   assert.equal(text, '');
+});
+
+test('档位门控：off 隐身、只写覆盖拦截，shouldInject 与 recallText 一致', async () => {
+  const entries = new Map();
+  const modes = {
+    get: (sid) => entries.get(sid)?.mode ?? 'auto',
+    getRecall: (sid) => entries.get(sid)?.recall,
+    resolvedRecall: (sid, globalRecall) => { const o = entries.get(sid)?.recall; return typeof o === 'boolean' ? o : globalRecall; },
+  };
+  const { recall } = makeRecall(RECORDS, {}, null, { modes });
+  assert.equal(recall.shouldInject('s1'), true);
+  assert.ok((await recall.recallText('s1', 'pnpm 部署流程')).includes('<recalled-memory>'));
+  entries.set('s1', { mode: 'off' });
+  assert.equal(recall.shouldInject('s1'), false);
+  assert.equal(await recall.recallText('s1', 'pnpm 部署流程'), '');
+  entries.set('s1', { mode: 'chat', recall: false });
+  assert.equal(recall.shouldInject('s1'), false); // 只写不读
+  entries.set('s1', { mode: 'chat', recall: true });
+  assert.equal(recall.shouldInject('s1'), true); // 强制开
+  entries.set('s1', { mode: 'chat', recall: null });
+  assert.equal(recall.shouldInject('s1'), true); // 覆盖清除跟随全局
+});
+
+test('分族过滤：chat 档只召回 chat 族记录，auto 档跨族', async () => {
+  const famRecords = [
+    { id: 'w1', content: '项目部署流程是 pnpm build && vercel', family: 'work', updatedAt: NOW },
+    { id: 'c1', content: '个人部署日记：pnpm 部署到 vercel', family: 'chat', updatedAt: NOW },
+  ];
+  const entries = new Map();
+  const modes = { get: (sid) => entries.get(sid)?.mode ?? 'auto', getRecall: () => undefined, resolvedRecall: (_sid, g) => g };
+  const { recall } = makeRecall(famRecords, {}, null, { modes });
+  entries.set('s1', { mode: 'work' });
+  const workText = await recall.recallText('s1', 'pnpm 部署流程');
+  assert.ok(workText.includes('项目部署流程'));
+  assert.ok(!workText.includes('个人部署日记'));
+  entries.set('s1', { mode: 'auto' });
+  const autoText = await recall.recallText('s2', 'pnpm 部署流程');
+  assert.ok(autoText.includes('项目部署流程') && autoText.includes('个人部署日记'));
+});
+
+test('hybrid 检索：嵌入源就绪时走 RRF 融合（向量路补关键词漏召回）', async () => {
+  // 向量让「负载」命中「负载均衡」记录（关键词二元组也能命中，这里验证融合路径不炸且有序）
+  const embedding = {
+    ready: () => true,
+    sourceChanged: () => false,
+    embedQuery: async () => [1, 0],
+    getVector: (id) => (id === 'm1' ? [1, 0] : id === 'm2' ? [0.9, 0.1] : null),
+  };
+  const { recall } = makeRecall(RECORDS, {}, null, { embedding });
+  const text = await recall.recallText('s1', 'pnpm 部署流程');
+  assert.match(text, /<recalled-memory>/);
 });
 
 test('关闭 / 空查询 / 无命中 → 空串', async () => {

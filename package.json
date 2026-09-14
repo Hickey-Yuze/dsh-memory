@@ -1,7 +1,7 @@
 {
   "name": "dsh-memory",
-  "version": "0.1.0",
-  "description": "Layered long-term memory for DeepSeek Harness: L0 conversation capture → L1 atomic memories → L2 scenes → L3 persona, with automatic recall injection, memory tools, and a memory workbench. 分层蒸馏长期记忆插件",
+  "version": "0.2.0",
+  "description": "Layered long-term memory for DeepSeek Harness: L0 conversation capture → L1 atomic memories (chat/work families) → L2 scenes → L3 persona, with session memory modes, hybrid RRF recall, distill route chains and a memory workbench. 分层蒸馏长期记忆插件",
   "type": "module",
   "main": "./index.js",
   "exports": {
