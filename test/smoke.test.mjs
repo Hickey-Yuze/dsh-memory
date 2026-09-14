@@ -90,7 +90,10 @@ test('真实 import host.js + 桩 ctx 全链路接线', async (t) => {
       },
     };
     for (const dep of deps) scope[dep] = services[dep];
-    cb(scope);
+    // cordis 语义回归：inject 回调返回值必须是 disposer 函数或 undefined，
+    // 返回其它值（如对象）会触发宿主 "Invalid effect" 并回滚整个注入（路由/工具全灭）
+    const ret = cb(scope);
+    assert.ok(ret === undefined || typeof ret === 'function', `inject(${deps.join(',')}) 回调返回值非法: ${typeof ret}`);
   }
   assert.ok(registeredRoutes.includes('/api-memory/health'));
   // 主 ctx 的 effect（稳定区 agent 作用域注册 / 嵌入调度）

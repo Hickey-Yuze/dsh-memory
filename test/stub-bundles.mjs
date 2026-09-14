@@ -39,5 +39,24 @@ export class BlockAssembler {
 `;
 
 const TOOLS_STUB = `
-export function defineTool(spec) { return spec; }
+// 按宿主 dsh-tools 的值 schema DSL 校验（对齐桌面端实测行为）：
+// 属性级 required 出现时必须为 true（可选 = 整个省略），数组形式（json-schema 子集）放行；
+// 违规即抛——把宿主端 "unsupported JSON schema" 注册失败拦截在测试期。
+function assertValueSchema(node, path) {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) throw new Error(path + ' must be a schema object');
+  for (const [key, child] of Object.entries(node)) {
+    if (key === 'required') {
+      if (Array.isArray(child)) continue; // 对象节点 required: [names]
+      if (child !== true) throw new Error(path + '.required must be true when present');
+      continue;
+    }
+    if (key === 'properties') { for (const [k, v] of Object.entries(child || {})) assertValueSchema(v, path + '.properties.' + k); continue; }
+    if (key === 'items') { assertValueSchema(child, path + '.items'); continue; }
+  }
+}
+export function defineTool(spec) {
+  for (const [key, child] of Object.entries(spec.parameters || {})) assertValueSchema(child, 'parameters.' + key);
+  if (spec.output && spec.output.schema) assertValueSchema(spec.output.schema, 'output');
+  return spec;
+}
 `;
