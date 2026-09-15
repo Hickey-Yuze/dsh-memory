@@ -1,6 +1,6 @@
 // 知识库索引单测：扫描（扩展名/噪音目录/碎片过滤）→ 分块 → 增量（mtime+size）→ 剔除
-// → 检索（relPath/absPath）；召回集成：L1 零命中也注入 <knowledge-index>、同会话去重、
-// 知识库检索失败不影响召回。
+// → 检索（关键词 + hybrid 语义）、embedDocs 契约、孤儿清理；召回集成：L1 零命中也注入
+// <knowledge-index>、同会话去重、知识库检索失败不影响召回。
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +16,7 @@ function silentLog() {
   return { debug() {}, info() {}, warn() {}, error() {}, tail: () => [], errors: () => [], lastError: () => null };
 }
 
-test('知识库：扫描 → 分块 → 增量 → 变化重索引 → 消失剔除 → 检索命中', (t) => {
+test('知识库：扫描 → 分块 → 增量 → 变化重索引 → 消失剔除 → 检索命中', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'dsh-kb-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const vault = join(home, 'vault');
@@ -35,10 +35,19 @@ test('知识库：扫描 → 分块 → 增量 → 变化重索引 → 消失剔
   assert.equal(r1.files, 2, '只索引 a.md 与 sub/b.md');
   assert.ok(r1.chunks >= 2);
 
-  const hits = kb.search('分仓决策路径 全国池兜底', { limit: 3 });
+  const hits = await kb.search('分仓决策路径 全国池兜底', { limit: 3 });
   assert.ok(hits.length > 0);
   assert.equal(hits[0].item.relPath, 'a.md');
   assert.ok(hits[0].item.absPath.includes('vault'));
+
+  // embedDocs：符合 embedding.ensureIndexed 契约（{id, content, updatedAt}）
+  const docs = kb.embedDocs();
+  assert.equal(docs.length, r1.chunks);
+  for (const d of docs) {
+    assert.equal(typeof d.id, 'string');
+    assert.ok(d.content.length >= 40);
+    assert.equal(typeof d.updatedAt, 'number');
+  }
 
   assert.equal(kb.scan().indexed, 0, '无变化不重索引');
 
@@ -52,6 +61,42 @@ test('知识库：扫描 → 分块 → 增量 → 变化重索引 → 消失剔
   const r4 = kb.scan();
   assert.equal(r4.dropped, 1);
   assert.equal(r4.files, 1);
+});
+
+test('知识库 hybrid：嵌入源就绪时走向量融合；孤儿清理只动 kb: 前缀', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-kb-hybrid-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const vault = join(home, 'vault');
+  mkdirSync(vault, { recursive: true });
+  writeFileSync(join(vault, 'latency.md'), '接口延迟优化：把串行调用改成流水线并行，P99 从 800 毫秒降到 120 毫秒，网关超时同步放宽。');
+  writeFileSync(join(vault, 'sync.md'), '数据同步机制：每晚执行全量备份，白天只追加增量日志，多端写入冲突以最后写入为准，同时保留完整的审计记录供回溯。');
+  const cfg = createConfig({ knowledge: { enabled: true, paths: [vault] } }, null);
+  // 假嵌入源：query 向量与 latency 片段同向 —— 语义路应把零关键词重叠的问法命中 latency.md
+  const V_LATENCY = [1, 0, 0];
+  const V_SYNC = [0, 1, 0];
+  const pruneCalls = [];
+  const embedding = {
+    ready: () => true,
+    sourceChanged: () => false,
+    embedQuery: async () => V_LATENCY,
+    getVector: (id) => (id.includes('latency.md') ? V_LATENCY : V_SYNC),
+    prunePrefix: (prefix, keep) => {
+      pruneCalls.push([prefix, [...keep]]);
+      return 0;
+    },
+  };
+  const kb = createKnowledgeIndex(home, { config: cfg, log: silentLog(), embedding });
+  kb.scan();
+  const hits = await kb.search('接口响应很慢怎么优化耗时', { limit: 2 });
+  assert.ok(hits.length > 0, 'hybrid 应有命中');
+  assert.match(hits[0].item.relPath, /latency\.md/, '向量路应把语义相关的片段排到首位');
+  const st = kb.status();
+  assert.equal(st.semanticReady, true);
+  assert.equal(st.vectorCount, 2);
+  kb.pruneOrphans();
+  assert.equal(pruneCalls.length, 1);
+  assert.equal(pruneCalls[0][0], 'kb:');
+  assert.equal(pruneCalls[0][1].length, 2, 'keep 集合应覆盖全部片段');
 });
 
 test('召回×知识库：L1 零命中也注入片段块；同会话去重；检索失败不影响', async (t) => {

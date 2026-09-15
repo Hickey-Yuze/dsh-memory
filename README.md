@@ -124,8 +124,8 @@ L3 persona.json     画像分族滚动更新（chat=个人画像 / work=工作�
 ## 开发
 
 ```bash
-npm test        # 53 项：存储（分族）/ 检索（hybrid）/ 配置（路由链洗白）/ Prompt / 管线（分族蒸馏）/
-                #       召回（档位门控）/ 会话档位 / 回退链 / 嵌入源 / 知识库（扫描增量+召回集成）/ 路由 / 冒烟
+npm test        # 54 项：存储（分族）/ 检索（hybrid）/ 配置（路由链洗白）/ Prompt / 管线（分族蒸馏）/
+                #       召回（档位门控）/ 会话档位 / 回退链 / 嵌入源 / 知识库（扫描增量+hybrid+召回集成）/ 路由 / 冒烟
 ```
 
 测试经 `test/stub-bundles.mjs` loader hooks 把 `@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-tools` 桩掉，
