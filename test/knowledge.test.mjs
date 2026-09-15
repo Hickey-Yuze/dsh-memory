@@ -97,6 +97,19 @@ test('知识库 hybrid：嵌入源就绪时走向量融合；孤儿清理只动 
   assert.equal(pruneCalls.length, 1);
   assert.equal(pruneCalls[0][0], 'kb:');
   assert.equal(pruneCalls[0][1].length, 2, 'keep 集合应覆盖全部片段');
+
+  // 语义门槛（防盲目）：最高余弦不过门槛 → 退回关键词路，无关提问零注入
+  const unrelatedKb = createKnowledgeIndex(
+    home,
+    {
+      config: createConfig({ knowledge: { enabled: true, paths: [vault] } }, null),
+      log: silentLog(),
+      embedding: { ...embedding, embedQuery: async () => [0, 0, 1] }, // 与两片段（x/y 轴）余弦均为 0，不过门槛
+    },
+  );
+  unrelatedKb.scan();
+  const junk = await unrelatedKb.search('今天晚饭吃什么好呢', { limit: 3, threshold: 0.45 });
+  assert.equal(junk.length, 0, '语义不过门槛且关键词无重叠 → 不注入（不硬凑 Top-N）');
 });
 
 test('召回×知识库：L1 零命中也注入片段块；同会话去重；检索失败不影响', async (t) => {
