@@ -71,3 +71,28 @@ test('Prompt 构造：包含记录与已有场景，输入截断生效', () => {
   const clipped = buildL3Prompt({ oldPersona: 'x'.repeat(300000), records: [], maxInputChars: 50000 });
   assert.ok(clipped.user.length <= 50100);
 });
+
+test('defuseTemplateVars：{{...}} 全角化，防 prompt 插值器 malformed/unknown 抛错', async () => {
+  const { defuseTemplateVars } = await import('../lib/prompts.js');
+  // 中文变量名（malformed 源头）
+  assert.equal(defuseTemplateVars('写 {{variables@名}} 用'), '写 ｛｛variables@名｝｝ 用');
+  // 合法名但未注册（unknown 源头）同样中性化
+  assert.equal(defuseTemplateVars('{{variables@x}}'), '｛｛variables@x｝｝');
+  // 无 {{ 的文本原样返回（同一引用）
+  const plain = '普通文本 {a} 单花括号';
+  assert.equal(defuseTemplateVars(plain), plain);
+  // 幂等：全角化后不再含 ASCII {{}}
+  const once = defuseTemplateVars('a {{b}} c');
+  assert.equal(defuseTemplateVars(once), once);
+  // 非字符串安全穿透
+  assert.equal(defuseTemplateVars(null), null);
+  assert.equal(defuseTemplateVars(undefined), undefined);
+  // parseL1Output 入库消毒（治本）
+  const { parseL1Output } = await import('../lib/prompts.js');
+  const l1 = parseL1Output(JSON.stringify({ memories: [{ content: '模板 {{variables@名}} 用法', tags: [] }] }));
+  assert.ok(!l1[0].content.includes('{{'));
+  // parseL3Output 入库消毒
+  const { parseL3Output } = await import('../lib/prompts.js');
+  const p = parseL3Output(JSON.stringify({ persona: 'x'.repeat(25) + ' 画像含 {{variables@名}} 占位' }));
+  assert.ok(!p.includes('{{'));
+});
