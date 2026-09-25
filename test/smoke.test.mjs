@@ -126,7 +126,9 @@ test('真实 import host.js + 桩 ctx 全链路接线', async (t) => {
   assert.equal(decision.messages.length, 2);
   assert.equal(decision.messages[1].role, 'user');
   assert.match(decision.messages[1].content[0].text, /<recalled-memory>/);
-  assert.equal(decision.messages[1].source.plugin, 'dsh-memory');
+  // v4 会话格式：producer-owned source kind（'plugin' 泛型已被宿主拒绝）
+  assert.equal(decision.messages[1].source.kind, 'dsh-memory');
+  assert.equal(decision.messages[1].source.form, 'snapshot');
   // step !== 1 不注入
   const laterStep = await listeners.get('agent/pre-step')[0]({ agent, step: 2, signal }, nextFor('pnpm 的偏好是什么'));
   assert.equal(laterStep.messages.length, 1);
