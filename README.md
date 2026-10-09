@@ -117,6 +117,13 @@ L3 persona.json     画像分族滚动更新（chat=个人画像 / work=工作�
 ```bash
 # 安装（假设插件已在 ~/.dsh/plugins/dsh-memory 并已登记 profile）
 # 修改代码后：把目录重新拷过去 + 重启 DSH
+#
+# 【宿主 ≥2.0.14 必做】新宿主用标准 Node 解析加载插件，@deepseek-ai/* 外部包不再
+# 预注入——需在插件根目录建 node_modules junction 指回宿主 app（宿主升级自动跟随）：
+#   node_modules/@deepseek-ai/dsh-llm   -> <宿主resources>/app/node_modules/@deepseek-ai/dsh-llm
+#   node_modules/@deepseek-ai/dsh-tools -> <宿主resources>/app/node_modules/@deepseek-ai/dsh-tools
+# 验证：在 ~/.dsh/profiles/<profile> 目录下 node -e "import('dsh-memory')"
+# 应输出 apply,inject,name；报 ERR_MODULE_NOT_FOUND 即 junction 缺失。
 
 # 卸载：从 profile package.json 移除依赖与 bundles 行，重启；数据保留在 ~/.dsh/dsh-memory/
 ```
