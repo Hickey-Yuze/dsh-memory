@@ -16,9 +16,12 @@ function silentLog() {
 
 const NOW = Date.now();
 function fakeStore(records, opts = {}) {
+  const biases = opts.biases || [];
   return {
     getRecords: opts.getRecords || ((family) => records.filter((r) => !family || r.family === family || !r.family && family === 'chat').map((r) => ({ ...r }))),
     getRecord: (id) => records.find((r) => r.id === id) || null,
+    getBiases: (family) => biases.filter((b) => !family || b.family === family).map((b) => ({ ...b })),
+    getBias: (id) => biases.find((b) => b.id === id) || null,
     getState: () => ({ stats: {} }),
     saveState() {},
   };
@@ -178,4 +181,65 @@ test('lastUserText：定位最后一条真实用户消息并跳过插件合成�
   assert.equal(recall.lastUserText(messages), '真正的最新问题');
   assert.equal(recall.lastUserText([{ role: 'assistant', content: [{ type: 'text', text: 'hi' }] }]), null);
   assert.equal(recall.lastUserText([]), null);
+});
+
+test('记忆类型标注：opinion / commitment 显式标注，fact 与存量记录零标记', async () => {
+  const kindRecords = [
+    { id: 'f1', content: '用户偏好 pnpm 管理依赖', family: 'chat', kind: 'fact', updatedAt: NOW },
+    { id: 'o1', content: '我判断用户下季度会换 Mac 笔记本', family: 'chat', kind: 'opinion', updatedAt: NOW },
+    { id: 'c1', content: '约定下周回访部署结果', family: 'chat', kind: 'commitment', updatedAt: NOW },
+  ];
+  const { recall } = makeRecall(kindRecords);
+  const op = await recall.recallText('s1', '他会不会换 Mac 笔记本');
+  assert.match(op, /（我的判断·非用户事实）/);
+  const cm = await recall.recallText('s2', '下周回访部署结果');
+  assert.match(cm, /（双方约定）/);
+  const ft = await recall.recallText('s3', 'pnpm 管理依赖偏好');
+  assert.ok(ft.includes('用户偏好 pnpm'));
+  assert.ok(!/（我的判断|（双方约定/.test(ft)); // fact 行不加标记
+  // 存量记录（无 kind 字段）→ 零标记，注入文本与升级前逐字一致
+  const { recall: legacy } = makeRecall([{ id: 'l1', content: '用户偏好 pnpm 管理依赖', family: 'chat', updatedAt: NOW }]);
+  const legacyText = await legacy.recallText('s4', 'pnpm 管理依赖偏好');
+  assert.ok(legacyText.includes('<recalled-memory>'));
+  assert.ok(!/（我的判断|（双方约定/.test(legacyText));
+});
+
+test('偏差档案：话题撞上才注入（L1 零命中也能单独注入），阈值外不出现', async () => {
+  const biases = [
+    { id: 'b1', no: 1, date: '2026-10-15', kind: 'judgment', scene: 'dsh-memory 存量改盘', deviation: '以为重启够快就不会被覆盖', rootCause: '插件内存里是旧 kind', fix: '改盘前先在 config overlay 关掉 extract.enabled', family: 'chat', updatedAt: NOW, hits: 0 },
+    { id: 'b2', no: 2, date: '2026-10-15', kind: 'judgment', scene: '黄金矿工 绳子不显示', deviation: '改完就以为好了', fix: '必须跑 verify-rope-fix.mjs 用指纹核验', family: 'chat', updatedAt: NOW, hits: 0 },
+  ];
+  const { recall } = makeRecall([], {}, fakeStore([], { biases }));
+  const hit = await recall.recallText('s1', '黄金矿工的绳子还是躺在地上');
+  assert.match(hit, /<bias-archive>/);
+  assert.match(hit, /B-2/);
+  assert.match(hit, /verify-rope-fix\.mjs/);
+  assert.ok(!hit.includes('B-1'), '不相关的偏差不该被注入');
+  assert.ok(!hit.includes('<recalled-memory>'), 'L1 零命中时只出偏差块');
+  // 同一会话内去重：第二次不再注入
+  assert.equal(await recall.recallText('s1', '黄金矿工的绳子还是躺在地上'), '');
+  // 无关话题 → 既不注入偏差也不注入 L1
+  assert.equal(await recall.recallText('s2', '今天天气不错'), '');
+  // 总开关关掉 → 偏差块不出现
+  const { recall: off } = makeRecall([], { bias: { enabled: false } }, fakeStore([], { biases }));
+  assert.equal(await off.recallText('s3', '黄金矿工的绳子还是躺在地上'), '');
+});
+
+test('超时降级：可选层卡住时仍注入 L1，不整轮丢弃', async () => {
+  const log = silentLog();
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-recall-'));
+  const config = createConfig({ recall: { timeoutMs: 80 }, knowledge: { enabled: true } }, null);
+  const store = fakeStore(RECORDS);
+  const dedupe = createRecallDedupe(dir, log);
+  const knowledge = { chunkCount: () => 5, search: () => new Promise(() => {}) }; // 知识库永不返回
+  const recall = createRecall({ store, config, log, modes: null, embedding: null, dedupe, knowledge });
+  try {
+    const started = Date.now();
+    const text = await recall.recallText('s1', 'pnpm 部署流程要注意什么');
+    assert.ok(Date.now() - started < 1000);
+    assert.notEqual(text, '');
+    assert.match(text, /部署流程/); // 同步层照常注入，只有知识库被放弃
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

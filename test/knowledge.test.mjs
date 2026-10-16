@@ -116,7 +116,7 @@ test('召回×知识库：L1 零命中也注入片段块；同会话去重；检
   const home = mkdtempSync(join(tmpdir(), 'dsh-kb-recall-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const NOW = Date.now();
-  const store = { getRecords: () => [], getRecord: () => null, getState: () => ({ stats: {} }), saveState() {} };
+  const store = { getRecords: () => [], getRecord: () => null, getBiases: () => [], getBias: () => null, getState: () => ({ stats: {} }), saveState() {} };
   const config = createConfig({ knowledge: { enabled: true } }, null);
   const log = silentLog();
   const fakeKb = {

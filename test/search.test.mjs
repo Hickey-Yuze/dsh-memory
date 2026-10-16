@@ -2,7 +2,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tokenize, scoreTokens, rankDocs, recencyFactor } from '../lib/search.js';
+import { tokenize, scoreTokens, rankDocs, recencyFactor, collapseNearDuplicates, applyExposureBalance, containmentOf } from '../lib/search.js';
 
 test('分词：CJK 二元组 + 拉丁词', () => {
   const tokens = tokenize('用户偏好的构建工具 pnpm');
@@ -56,4 +56,32 @@ test('scoreTokens：子串部分加权', () => {
   const docTokens = tokenize('pnpmworkspacenote'); // 无独立词元但有子串
   const score = scoreTokens(q, docTokens, 'pnpmworkspacenote');
   assert.ok(score > 0 && score < 2);
+});
+
+test('近重复收敛：同族相似条目只留分数高的那条，跨族不合并', () => {
+  const docs = [
+    { id: 'a', family: 'work', hits: 3, text: '用户偏好使用 pnpm 管理依赖，并且在 CI 里跑 pnpm test' },
+    { id: 'b', family: 'work', hits: 0, text: '用户偏好使用 pnpm 管理依赖' },
+    { id: 'c', family: 'chat', hits: 0, text: '用户偏好使用 pnpm 管理依赖' },
+    { id: 'd', family: 'work', hits: 0, text: '用户养了一只叫豆豆的猫' },
+  ];
+  const scored = docs.map((d, i) => ({ score: 1 - i * 0.01, item: d }));
+  const kept = collapseNearDuplicates(scored);
+  assert.deepEqual(kept.map((k) => k.item.id), ['a', 'c', 'd']);
+  assert.equal(kept[0].merged, 1);
+});
+
+test('曝光均衡：同分同族内命中少的先上，分差超阈值不动', () => {
+  const scored = [
+    { score: 0.8, item: { id: 'hot', family: 'work', hits: 25 } },
+    { score: 0.795, item: { id: 'cold', family: 'work', hits: 0 } },
+    { score: 0.6, item: { id: 'far', family: 'work', hits: 0 } },
+  ];
+  const out = applyExposureBalance(scored);
+  assert.deepEqual(out.map((x) => x.item.id), ['cold', 'hot', 'far']);
+});
+
+test('containmentOf：短集被长集完全包含为 1，无关为 0', () => {
+  assert.equal(containmentOf(tokenize('部署流程 pnpm'), tokenize('用户说部署流程用 pnpm 构建')), 1);
+  assert.equal(containmentOf(tokenize('养猫 豆豆'), tokenize('完全无关的一句话')), 0);
 });

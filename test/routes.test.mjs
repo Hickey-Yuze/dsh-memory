@@ -71,6 +71,7 @@ async function callPost(handler, body) {
   const req = new PassThrough();
   req.method = 'POST';
   req.url = 'http://localhost';
+  req.headers = { 'x-dsh-memory': '1' }; // 同源客户端自带（宿主端写操作守卫）
   req.end(JSON.stringify(body));
   await handler(req, res);
   return sink;
@@ -117,4 +118,27 @@ test('rebuild / records/delete / wipe', async (t) => {
   assert.equal(wipe.body.ok, true);
   const bad = await callPost(routes['/api-memory/records/delete'], {});
   assert.equal(bad.body.ok, false);
+});
+
+// ============ 写操作守卫：跨站请求不能清库 ============
+
+import { mutationAllowed, MUTATION_HEADER } from '../lib/routes.js';
+
+const gateReq = (method, headers = {}) => ({ method, headers: { host: '127.0.0.1:43120', ...headers } });
+
+test('写操作守卫：读放行，写必须带同源头，跨源一律拒', () => {
+  assert.equal(mutationAllowed(gateReq('GET')).ok, true);
+  assert.equal(mutationAllowed(gateReq('HEAD')).ok, true);
+
+  const noHeader = mutationAllowed(gateReq('POST', { origin: 'https://evil.example' }));
+  assert.equal(noHeader.ok, false);
+  assert.match(noHeader.reason, /x-dsh-memory/);
+
+  const crossOrigin = mutationAllowed(gateReq('POST', { [MUTATION_HEADER]: '1', origin: 'https://evil.example' }));
+  assert.equal(crossOrigin.ok, false);
+  assert.match(crossOrigin.reason, /跨源/);
+
+  assert.equal(mutationAllowed(gateReq('POST', { [MUTATION_HEADER]: '1', origin: 'http://127.0.0.1:43120' })).ok, true);
+  assert.equal(mutationAllowed(gateReq('POST', { [MUTATION_HEADER]: '1' })).ok, true);
+  assert.equal(mutationAllowed(gateReq('DELETE', { [MUTATION_HEADER]: '1' })).ok, true);
 });

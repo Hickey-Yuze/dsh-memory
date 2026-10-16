@@ -309,14 +309,14 @@ test('routes：sessions 列表/设置 + insights 粒度聚合', async (t) => {
   assert.equal(alpha.effectiveMode, 'auto');
   // POST sessions 设档位 + 只写
   const res2 = { writeHead() {}, end(body) { this.body = body; } };
-  await handlers.get('/api-memory/sessions')({ method: 'POST', url: 'http://x/api-memory/sessions' }, res2, respond);
+  await handlers.get('/api-memory/sessions')({ method: 'POST', url: 'http://x/api-memory/sessions', headers: { 'x-dsh-memory': '1' } }, res2, respond);
   void respond;
   // readBody 需要 req 流：直接构造
   const postJson = (path, body) => new Promise((resolve, reject) => {
     const req = Readable.from([Buffer.from(JSON.stringify(body))]);
     req.method = 'POST';
     req.url = `http://x${path}`;
-    req.headers = {};
+    req.headers = { 'x-dsh-memory': '1' }; // 写操作必须带同源头（宿主端守卫）
     const res = { writeHead() {}, end(b) { resolve(JSON.parse(b)); } };
     handlers.get(path)(req, res).catch(reject);
   });

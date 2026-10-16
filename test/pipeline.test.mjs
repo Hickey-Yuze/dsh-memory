@@ -212,3 +212,216 @@ test('重建取消', async (t) => {
   }
   assert.equal(store.getState().rebuild.phase, 'cancelled');
 });
+
+test('L2 分批：积压按批送进 prompt，不再一次性塞爆', async (t) => {
+  const handler = ({ user }) => {
+    const ids = [...user.matchAll(/- \[(m_[a-z0-9]+)\]/g)].map((m) => m[1]);
+    return {
+      ok: true,
+      text: JSON.stringify({ scenes: [{ title: '工程偏好', content: '工程类记忆合集', record_ids: ids }], dropped_ids: [] }),
+      route: { provider: 'p', model: 'm' },
+      usage: { outputTokens: 30 },
+    };
+  };
+  const { store, pipeline, calls } = setup(t, { 'memory:scene': handler }, { l2: { minNewMemories: 99, batchRecords: 3, maxBatchesPerRun: 2 } });
+  for (let i = 1; i <= 7; i++) store.upsertRecord({ content: `工程记忆 ${i}`, family: 'chat' });
+  await pipeline.maybeL2('chat');
+  assert.equal(calls.length, 2, '单次触发只跑 maxBatchesPerRun 批');
+  for (const call of calls) {
+    const ids = [...call.user.matchAll(/- \[(m_[a-z0-9]+)\]/g)];
+    assert.ok(ids.length <= 3, `单批记忆数应 ≤ batchRecords，实际 ${ids.length}`);
+  }
+  assert.equal(store.getRecords('chat').filter((r) => r.sceneId).length, 6, '两批共 6 条进了场景');
+  assert.equal(store.getPendingRecords('chat').length, 1, '两批消化 6 条，剩 1 条等下轮');
+});
+
+test('L2 未归类条目不卡队头：打跳过标记后队列归零', async (t) => {
+  const handler = () => ({
+    ok: true,
+    text: JSON.stringify({ scenes: [{ title: '空场景', content: '暂无内容', record_ids: [] }], dropped_ids: [] }),
+    route: { provider: 'p', model: 'm' },
+    usage: { outputTokens: 10 },
+  });
+  const { store, pipeline, calls } = setup(t, { 'memory:scene': handler }, { l2: { minNewMemories: 99, batchRecords: 2, maxBatchesPerRun: 5 } });
+  for (let i = 1; i <= 5; i++) store.upsertRecord({ content: `零散记忆 ${i}`, family: 'chat' });
+  await pipeline.maybeL2('chat');
+  assert.equal(store.getPendingRecords('chat').length, 0, '模型没归类的条目应被跳过标记，不再卡住队头');
+  assert.equal(calls.length, 3, '5 条按每批 2 条分 3 批消化');
+});
+
+test('L2 沿用未提及的已有场景：漏掉≠删除', async (t) => {
+  const phase = { n: 0 };
+  const first = () => {
+    phase.n += 1;
+    const title = phase.n === 1 ? '甲场景' : '乙场景';
+    return {
+      ok: true,
+      text: JSON.stringify({ scenes: [{ title, content: `${title}的内容`, record_ids: [] }], dropped_ids: [] }),
+      route: { provider: 'p', model: 'm' },
+      usage: { outputTokens: 10 },
+    };
+  };
+  const { store, pipeline } = await setup(t, { 'memory:scene': first }, { l2: { minNewMemories: 99, batchRecords: 2, maxBatchesPerRun: 1 } });
+  store.upsertRecord({ content: '记忆 A', family: 'chat' });
+  store.upsertRecord({ content: '记忆 B', family: 'chat' });
+  await pipeline.buildScenes('chat', 1);
+  const kept = store.getScenes('chat');
+  assert.equal(kept.length, 1);
+  // 第二批：模型只回新场景、完全没提甲场景 → 甲场景必须被兜住
+  store.upsertRecord({ content: '记忆 C', family: 'chat' });
+  store.upsertRecord({ content: '记忆 D', family: 'chat' });
+  store.upsertRecord({ content: '记忆 E', family: 'chat' });
+  await pipeline.buildScenes('chat', 1);
+  const after = store.getScenes('chat');
+  assert.ok(after.some((s) => s.title === '甲场景'), '未提及的已有场景不能被丢掉');
+  assert.ok(after.length >= 2);
+});
+
+test('L2 沿用场景：只回 id+title 时，正文与成员由管线保留', async (t) => {
+  const phase = { n: 0 };
+  const handler = ({ user }) => {
+    phase.n += 1;
+    const ids = [...user.matchAll(/- \[(m_[a-z0-9]+)\]/g)].map((m) => m[1]);
+    const sceneIds = [...user.matchAll(/- \[(s_[a-z0-9]+)\] /g)].map((m) => m[1]);
+    const base = { ok: true, route: { provider: 'p', model: 'm' }, usage: { outputTokens: 20 } };
+    if (phase.n === 1) {
+      return { ...base, text: JSON.stringify({ scenes: [{ title: '甲场景', content: '甲的正文', record_ids: ids }], dropped_ids: [] }) };
+    }
+    return {
+      ...base,
+      text: JSON.stringify({
+        scenes: [
+          { id: sceneIds[0], title: '甲场景' }, // 沿用：不回 content、不回 record_ids
+          { title: '乙场景', content: '乙的正文', record_ids: ids },
+        ],
+        dropped_ids: [],
+      }),
+    };
+  };
+  const { store, pipeline } = await setup(t, { 'memory:scene': handler }, { l2: { minNewMemories: 99, batchRecords: 2, maxBatchesPerRun: 1 } });
+  store.upsertRecord({ content: '记忆 A1', family: 'chat' });
+  store.upsertRecord({ content: '记忆 A2', family: 'chat' });
+  await pipeline.buildScenes('chat', 1);
+  const jia = store.getScenes('chat').find((s) => s.title === '甲场景');
+  assert.ok(jia && jia.content === '甲的正文');
+  assert.equal((jia.recordIds || []).length, 2);
+
+  store.upsertRecord({ content: '记忆 B1', family: 'chat' });
+  store.upsertRecord({ content: '记忆 B2', family: 'chat' });
+  await pipeline.buildScenes('chat', 1);
+  const scenes = store.getScenes('chat');
+  const jia2 = scenes.find((s) => s.title === '甲场景');
+  assert.equal(jia2.content, '甲的正文', '沿用场景的正文不能被清空');
+  assert.equal((jia2.recordIds || []).length, 2, '沿用场景的成员不能被清空');
+  assert.equal((scenes.find((s) => s.title === '乙场景').recordIds || []).length, 2);
+});
+
+test('后台整合：进度可见（批次递增 / 剩余递减 / 预估值与耗时）', async (t) => {
+  const handler = ({ user }) => {
+    const ids = [...user.matchAll(/- \[(m_[a-z0-9]+)\]/g)].map((m) => m[1]);
+    return {
+      ok: true,
+      text: JSON.stringify({ scenes: [{ title: '进度场景', content: '正文', record_ids: ids }], dropped_ids: [] }),
+      route: { provider: 'p', model: 'm' },
+      usage: { outputTokens: 10 },
+    };
+  };
+  const { store, pipeline } = await setup(t, { 'memory:scene': handler }, { l2: { minNewMemories: 99, batchRecords: 2, maxBatchesPerRun: 2 } });
+  for (let i = 0; i < 6; i++) store.upsertRecord({ content: `记忆 P${i}`, family: 'chat' });
+  const started = pipeline.startSceneBuild('chat', 3);
+  assert.equal(started.started, true);
+  assert.equal(started.pendingBefore, 6);
+  assert.equal(started.pendingAfter, 6);
+  assert.equal(started.total, 3);
+  assert.equal(started.batchSize, 2);
+  assert.equal(started.running, true);
+  assert.ok(typeof started.elapsedMs === 'number');
+  assert.equal(pipeline.startSceneBuild('chat', 3).started, false, '已在跑时不重复启动');
+  for (let i = 0; i < 60 && pipeline.sceneBuildStatus().running; i++) await new Promise((r) => setTimeout(r, 10));
+  const st = pipeline.sceneBuildStatus();
+  assert.equal(st.running, false);
+  assert.equal(st.batches, 3);
+  assert.equal(st.pendingAfter, 0);
+  assert.equal(st.error, '');
+  assert.ok(st.finishedAt > 0 && st.elapsedMs >= 0);
+});
+
+test('L2 分批：按字符预算自动缩小批', async (t) => {
+  const seen = [];
+  const handler = ({ user }) => {
+    const ids = [...user.matchAll(/- \[(m_[a-z0-9]+)\]/g)].map((m) => m[1]);
+    seen.push(ids.length);
+    return {
+      ok: true,
+      text: JSON.stringify({ scenes: [{ title: `批${seen.length}`, content: '正文', record_ids: ids }], dropped_ids: [] }),
+      route: { provider: 'p', model: 'm' },
+      usage: { outputTokens: 5 },
+    };
+  };
+  const { store, pipeline } = await setup(t, { 'memory:scene': handler }, { l2: { minNewMemories: 99, batchRecords: 60, batchChars: 800 } });
+  for (let i = 0; i < 6; i++) store.upsertRecord({ content: 'x'.repeat(300) + `#${i}`, family: 'chat' });
+  await pipeline.buildScenes('chat', 1);
+  assert.deepEqual(seen, [2], '800 字符预算下每批 2 条');
+});
+
+test('L2 拆半重试：整批输出被 max-tokens 打回时自动拆小重跑', async (t) => {
+  let calls = 0;
+  const handler = ({ user }) => {
+    calls += 1;
+    const ids = [...user.matchAll(/- \[(m_[a-z0-9]+)\]/g)].map((m) => m[1]);
+    const base = { route: { provider: 'p', model: 'm' } };
+    if (ids.length > 2) return { ...base, ok: false, error: '空输出（finish=max-tokens, output=16384tok）' };
+    return {
+      ...base,
+      ok: true,
+      text: JSON.stringify({ scenes: [{ title: `场景${calls}`, content: '正文', record_ids: ids }], dropped_ids: [] }),
+      usage: { outputTokens: 10 },
+    };
+  };
+  const { store, pipeline } = await setup(t, { 'memory:scene': handler }, { l2: { minNewMemories: 99, batchRecords: 60, minBatchRecords: 1 } });
+  for (let i = 0; i < 6; i++) store.upsertRecord({ content: `记忆 S${i}`, family: 'chat' });
+  await pipeline.buildScenes('chat', 5);
+  assert.ok(calls > 2, `应发生拆半重试（实际调用 ${calls} 次）`);
+  assert.equal(store.getPendingRecords('chat').length, 0, '拆半后积压清零');
+  const covered = store.getScenes('chat').reduce((n, s) => n + (s.recordIds || []).length, 0);
+  assert.equal(covered, 6, '6 条记忆都归入场景');
+});
+
+test('L2 到下限仍被打回：跳过该批而不是整族卡死', async (t) => {
+  const handler = () => ({ ok: false, error: '空输出（finish=max-tokens, output=16384tok）', route: { provider: 'p', model: 'm' }, usage: {} });
+  const { store, pipeline } = await setup(t, { 'memory:scene': handler }, { l2: { minNewMemories: 99, batchRecords: 60, minBatchRecords: 4 } });
+  for (let i = 0; i < 4; i++) store.upsertRecord({ content: `记忆 K${i}`, family: 'chat' });
+  const ids = store.getRecords('chat').map((r) => r.id);
+  await pipeline.buildScenes('chat', 3);
+  assert.equal(store.getPendingRecords('chat').length, 0, '不再卡在队头');
+  assert.ok(ids.every((id) => store.getRecord(id).l2SkippedAt > 0), '被跳过的记录打了标记');
+  store.upsertRecord({ id: ids[0], content: '记忆 K0（更新过）', family: 'chat' });
+  assert.ok(store.getPendingRecords('chat').some((r) => r.id === ids[0]), '内容更新后重新参与整合');
+});
+
+test('L2 同名场景守卫：模型把同一主题又建一遍时不重复建档', async (t) => {
+  const handler = ({ user }) => {
+    const ids = [...user.matchAll(/- \[(m_[a-z0-9]+)\]/g)].map((m) => m[1]);
+    return {
+      ok: true,
+      text: JSON.stringify({ scenes: [{ title: '甲场景', content: '甲的内容', record_ids: ids }], dropped_ids: [] }),
+      route: { provider: 'p', model: 'm' },
+      usage: { outputTokens: 10 },
+    };
+  };
+  const { store, pipeline } = await setup(t, { 'memory:scene': handler }, { l2: { minNewMemories: 99, batchRecords: 2, maxBatchesPerRun: 1 } });
+  store.upsertRecord({ content: '记忆 A', family: 'chat' });
+  store.upsertRecord({ content: '记忆 B', family: 'chat' });
+  await pipeline.buildScenes('chat', 1);
+  const id1 = store.getScenes('chat')[0].id;
+  // 第二批：模型没回 id，而是要新建一个标题完全一样的场景 → 应认领已有那条
+  store.upsertRecord({ content: '记忆 C', family: 'chat' });
+  store.upsertRecord({ content: '记忆 D', family: 'chat' });
+  store.upsertRecord({ content: '记忆 E', family: 'chat' });
+  await pipeline.buildScenes('chat', 1);
+  const scenes = store.getScenes('chat');
+  assert.equal(scenes.length, 1, '同名场景不该重复建档');
+  assert.equal(scenes[0].id, id1, '沿用原场景 id');
+  // batchRecords=2：第一批 2 条、第二批 2 条（第三条 E 还在队列里等下一批）
+  assert.equal(scenes[0].recordIds.length, 4, '两批记忆都并进同一个场景');
+});

@@ -29,6 +29,33 @@ test('parseL1Output：合法条目保留，脏条目丢弃，上限生效', () =
   assert.equal(parseL1Output('不是 JSON'), null);
 });
 
+test('parseL1Output：kind 三值保留，非法与缺失不写死（交由 store 兜底 fact）', () => {
+  const items = parseL1Output(JSON.stringify({
+    memories: [
+      { content: '用户偏好 pnpm', kind: 'fact' },
+      { content: '我推测他会换 Mac', kind: 'opinion' },
+      { content: '下次记得提醒体检', kind: 'commitment' },
+      { content: '类型瞎写的', kind: 'guess' }, // 非法 → undefined
+      { content: '没写类型的旧格式' },            // 缺失 → undefined
+    ],
+  }));
+  assert.equal(items.length, 5);
+  assert.equal(items[0].kind, 'fact');
+  assert.equal(items[1].kind, 'opinion');
+  assert.equal(items[2].kind, 'commitment');
+  assert.equal(items[3].kind, undefined);
+  assert.equal(items[4].kind, undefined);
+});
+
+test('buildL1Prompt：auto / work / chat 三种模式都下发 kind 判定规则与输出字段', () => {
+  const slice = [{ r: 'user', text: '我们用 pnpm 吧' }];
+  for (const family of ['auto', 'work', 'chat']) {
+    const { system } = buildL1Prompt({ slice, backgroundCount: 0, existingPool: [], maxMemories: 8, family });
+    assert.match(system, /类型判定（kind）/, `${family} 缺 kind 规则`);
+    assert.match(system, /"kind":"fact\|opinion\|commitment"/, `${family} 缺 kind 输出字段`);
+  }
+});
+
 test('parseL2Output：结构校验', () => {
   const parsed = parseL2Output(JSON.stringify({
     scenes: [
@@ -95,4 +122,27 @@ test('defuseTemplateVars：{{...}} 全角化，防 prompt 插值器 malformed/un
   const { parseL3Output } = await import('../lib/prompts.js');
   const p = parseL3Output(JSON.stringify({ persona: 'x'.repeat(25) + ' 画像含 {{variables@名}} 占位' }));
   assert.ok(!p.includes('{{'));
+});
+
+test('extractJsonLoose：截断 JSON 抢救出已写完的元素', () => {
+  const cutMid = '{"scenes":[{"id":"s1","title":"甲","content":"内容甲","record_ids":["m1"]},{"id":"s2","title":"乙","con';
+  const obj = extractJsonLoose(cutMid);
+  assert.ok(obj && Array.isArray(obj.scenes), '截断输出应能抢救出可解析的部分');
+  assert.equal(obj.scenes[0].title, '甲');
+  assert.deepEqual(obj.scenes[0].record_ids, ['m1']);
+
+  const brokenTail = '{"scenes":[{"id":"s1","title":"甲","record_ids":["m1"]},{"id":';
+  const recovered = extractJsonLoose(brokenTail);
+  assert.ok(recovered && recovered.scenes.length === 1, '写坏的第二个元素应被丢掉');
+
+  assert.equal(extractJsonLoose('完全没有大括号'), null);
+  assert.equal(extractJsonLoose('{"scenes":'), null);
+});
+
+test('parseL2Output：截断输出仍能取出前几个场景', () => {
+  const text = '{"scenes":[{"id":"s1","title":"甲","content":"内容甲","record_ids":["m1"]},{"id":"s2","tit';
+  const parsed = parseL2Output(text);
+  assert.ok(parsed, '截断时不应整条判废');
+  assert.equal(parsed.scenes[0].title, '甲');
+  assert.deepEqual(parsed.scenes[0].record_ids, ['m1']);
 });
