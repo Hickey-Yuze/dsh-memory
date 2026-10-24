@@ -60,7 +60,8 @@ L3 persona.json     画像分族滚动更新（chat=个人画像 / work=工作�
   - 洞察：窗口（1~365 天）/ 粒度（天/周/月）/ 层级筛选，**分模型趋势图**，均值/中位数统计表、**记忆体检卡**（覆盖率/头部垄断/沉睡/近重复合并 + **召回质量测试卡**）
   - 记忆库：分域徽章与筛选（个人/工作）
 - **记忆体检**（洞察页卡片 + `memory_audit` 工具，只读）：召回覆盖率、头部垄断、近重复分组与合并（可撤销）、沉睡清单；**召回质量测试卡**抽旧记忆当考题、只给一半提示跑一遍真实召回链路，计「命中/半对/记错」——体检的其余指标只看结构，这张卡看的是召回得准不准
-- **HTTP 数据面**：`/api-memory/health|overview|assets|config|sessions|insights|logs|rebuild|embedding|records/delete|wipe|scenes|audit|recall-test|records/merge|scenes/merge`
+- **HTTP 数据面**：`/api-memory/health|overview|assets|config|sessions|insights|logs|rebuild|embedding|records/delete|wipe|scenes|audit|recall-test|records/merge|scenes/merge|sync/status|sync/upload|sync/download`
+- **跨设备同步**（维护页卡片，GitHub 快照式）：Mac 与 Windows 各装一份，平时只用一台；用完点「上传」，另一台点「同步」拉回来并合并。**不是文件夹同步**——`records.json` 等是整表原子写，同步器同步文件块会整表覆盖（丢两千多条，不是丢几条），这里走「显式上传 / 显式拉取 + 语义合并」。合并规则：L1 记忆与偏差档案按 id 并集、同 id 取 `updatedAt` 晚者、`hits` 取 max（不累加，避免跨机重复膨胀）；L2 场景按 id 并集、成员取并集；L3 画像按族取 `updatedAt` 晚者（画像是整体重写，混拼无意义）；删除靠墓碑（`sync-tombstones.json`）传播，不会被合回来。写前自动备份 `*.bak-sync-<ts>`。远端布局：`memory-sync/snapshot.json.gz` + `manifest.json` + `devices/<id>.json`
 - **全量重建**：丢弃 L1–L3 从 L0 重导（统一 auto 档归族，进度可视、可取消）；`/compact` 压缩后召回去重自动重置
 - **蒸馏可靠性**：主路由失败（报错/掐断/空输出）按 `llm.fallbacks` 顺序降级，每条路由各享全额超时，逐次尝试记账；`llm.layerRoutes` 可给 L1/L2/L3 配独立链；L1 输入超限自动分块抽取
 
@@ -79,6 +80,7 @@ L3 persona.json     画像分族滚动更新（chat=个人画像 / work=工作�
 | `recall-dedupe.json` | 召回去重持久化（LRU 200 会话 / 512 id / 90 天） |
 | `vectors.json` | 向量缓存（嵌入源 meta + 逐记录向量，差量重嵌） |
 | `activity.jsonl` / `usage.jsonl` | 资产活动流 / 蒸馏逐次记账（成本、失败、思考 token） |
+| `sync-tombstones.json` | 跨设备同步的删除墓碑（已删的 id，永不清理） |
 | `config.json` | 设置页写入的运行时覆盖（节级合并到 YAML 之上） |
 | `memory.log` | 诊断日志（自动轮转） |
 
@@ -111,6 +113,13 @@ L3 persona.json     画像分族滚动更新（chat=个人画像 / work=工作�
       apiKey: ''
       model: ''
       dimensions: 0       # 须与模型输出一致
+    sync:                # 跨设备同步（GitHub 快照式；优先在设置页「维护」里配）
+      enabled: true
+      repo: ''           # owner/repo，如 Hickey-Yuze/dsh-memory-sync
+      branch: main
+      token: ''          # 细粒度 PAT，只给该仓库 contents 读写
+      deviceName: ''     # 留空＝主机名
+      includeL0: false   # 是否连 L0 原始对话一起同步（体积大，默认不同步）
 ```
 
 ## 安装 / 卸载
@@ -132,8 +141,19 @@ L3 persona.json     画像分族滚动更新（chat=个人画像 / work=工作�
 ## 开发
 
 ```bash
-npm test        # 54 项：存储（分族）/ 检索（hybrid）/ 配置（路由链洗白）/ Prompt / 管线（分族蒸馏）/
-                #       召回（档位门控）/ 会话档位 / 回退链 / 嵌入源 / 知识库（扫描增量+hybrid+召回集成）/ 路由 / 冒烟
+npm test        # 120 项：存储（分族）/ 检索（hybrid）/ 配置（路由链洗白）/ Prompt / 管线（分族蒸馏）/
+                #       召回（档位门控）/ 会话档位 / 回退链 / 嵌入源 / 知识库（扫描增量+hybrid+召回集成）/
+                #       路由 / 冒烟 / 记忆体检 / 记忆测试卡 / 跨设备同步（合并语义 + 落库 + 墓碑）
+```
+
+独立验证脚本（不依赖单测，直接打真实代码路径）：
+
+```bash
+node verify-sync.mjs   # 跨设备同步端到端（起假 GitHub API，双机上传/下载/合并/删除传播/幂等/降级）
+node verify-l2.mjs     # L2 分批与失败降级
+node verify-audit.mjs  # 记忆体检与测试卡
+node verify-kind.mjs   # L1 kind 回填与漂移
+node verify-bias.mjs   # 偏差档案
 ```
 
 测试经 `test/stub-bundles.mjs` loader hooks 把 `@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-tools` 桩掉，
