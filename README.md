@@ -54,12 +54,13 @@ L3 persona.json     画像分族滚动更新（chat=个人画像 / work=工作�
 ## 组件
 
 - **输入栏记忆芯片**（`conversation.input.left` 槽位）：显示当前会话生效档位（记忆 · 智能/日常/工作/暂停，含只写后缀），点击弹出档位 + 数据流切换菜单；未覆盖项走「跟随全局」
-- **三个记忆工具**（`ctx.tools`）：`memory_search`（L1 检索，按会话档位过滤族）、`conversation_search`（L0 跨会话检索）、`memory_read_scene`（L2 场景全文）
+- **三个记忆工具**（`ctx.tools`）：`memory_search`（L1 检索，按会话档位过滤族）、`conversation_search`（L0 跨会话检索）、`memory_read_scene`（L2 场景全文）、`memory_bias`（偏差档案）、`memory_audit`（记忆体检，加 `test=true` 跑记忆测试卡）
 - **设置页「记忆」工作台**（五区，对齐原版布局）：总览 / 记忆库 / 自动化 / 洞察 / 维护
   - 自动化：开关、默认档位、**会话档位管理**、**蒸馏路由链编辑**（回退链 + L1/L2/L3 独立链）、**嵌入源面板**（远程 OpenAI 兼容 /embeddings）
-  - 洞察：窗口（1~365 天）/ 粒度（天/周/月）/ 层级筛选，**分模型趋势图**，均值/中位数统计表
+  - 洞察：窗口（1~365 天）/ 粒度（天/周/月）/ 层级筛选，**分模型趋势图**，均值/中位数统计表、**记忆体检卡**（覆盖率/头部垄断/沉睡/近重复合并 + **召回质量测试卡**）
   - 记忆库：分域徽章与筛选（个人/工作）
-- **HTTP 数据面**：`/api-memory/health|overview|assets|config|sessions|insights|logs|rebuild|embedding|records/delete|wipe|scenes`
+- **记忆体检**（洞察页卡片 + `memory_audit` 工具，只读）：召回覆盖率、头部垄断、近重复分组与合并（可撤销）、沉睡清单；**召回质量测试卡**抽旧记忆当考题、只给一半提示跑一遍真实召回链路，计「命中/半对/记错」——体检的其余指标只看结构，这张卡看的是召回得准不准
+- **HTTP 数据面**：`/api-memory/health|overview|assets|config|sessions|insights|logs|rebuild|embedding|records/delete|wipe|scenes|audit|recall-test|records/merge|scenes/merge`
 - **全量重建**：丢弃 L1–L3 从 L0 重导（统一 auto 档归族，进度可视、可取消）；`/compact` 压缩后召回去重自动重置
 - **蒸馏可靠性**：主路由失败（报错/掐断/空输出）按 `llm.fallbacks` 顺序降级，每条路由各享全额超时，逐次尝试记账；`llm.layerRoutes` 可给 L1/L2/L3 配独立链；L1 输入超限自动分块抽取
 

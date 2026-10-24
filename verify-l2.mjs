@@ -50,6 +50,21 @@ const pendingWork = store.getPendingRecords('work');
 const pendingChat = store.getPendingRecords('chat');
 const workChars = pendingWork.reduce((n, r) => n + r.content.length, 0);
 console.log(`  chat 待整合 ${pendingChat.length} 条 / work 待整合 ${pendingWork.length} 条（work 正文 ${workChars} 字符）`);
+
+// 积压清零后（正常状态），本脚本的 B/C/E 三组需要「有积压」才能演练。
+// 这里就地造一批未归场景的副本记录，让验证始终可跑——不碰生产库。
+let synthetic = 0;
+if (pendingWork.length < 40) {
+  const need = 40 - pendingWork.length;
+  for (let i = 0; i < need; i += 1) {
+    store.upsertRecord({
+      content: `合成验证记录 ${i}：像素办公室场景渲染要继续优化走路卡顿的问题，第 ${i} 条`,
+      family: 'work',
+    });
+  }
+  synthetic = need;
+  console.log(`  （生产库积压已清零，就地补 ${need} 条合成记录用于演练 B/C/E；仅副本）`);
+}
 const oldPrompt = buildL2Prompt({
   records: pendingWork,
   existingScenes: store.getScenes('work'),
@@ -73,7 +88,9 @@ if (oldPrompt.user.length > cfg0.l2.batchChars) {
 const charBudget = cfg0.l2.batchChars;
 let firstN = 0;
 let firstChars = 0;
-for (const r of pendingWork) {
+// 用补料后的积压算「首批」（pendingWork 是补料前的快照）
+const pendingForBudget = store.getPendingRecords('work');
+for (const r of pendingForBudget) {
   if (firstN >= cfg0.l2.batchRecords) break;
   const len = r.content.length;
   if (firstN > 0 && firstChars + len > charBudget) break;
@@ -160,6 +177,15 @@ console.log('\nE 模拟真实失败：条数多的批次烧光输出预算 → �
 const dir2 = mkdtempSync(join(tmpdir(), 'dsh-l2-verify-'));
 copyFileSync(recordsPath, join(dir2, 'records.json'));
 const store2 = createStore(dir2, silentLog());
+// 同上：E 组要有「条数多的批次」才能触发打回，积压清零时补合成记录
+if (store2.getPendingRecords('work').length < 40) {
+  for (let i = 0; i < 40; i += 1) {
+    store2.upsertRecord({
+      content: `E 组合成验证记录 ${i}：像素办公室场景渲染要继续优化走路卡顿的问题，第 ${i} 条`,
+      family: 'work',
+    });
+  }
+}
 const calls = [];
 const model2 = ({ user }) => {
   const ids = [...user.matchAll(/- \[(m_[a-z0-9]+)\]/g)].map((m) => m[1]);

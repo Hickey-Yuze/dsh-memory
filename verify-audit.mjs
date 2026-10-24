@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createStore } from './lib/store.js';
-import { auditHealth, auditSummary, groupDuplicates, planAutoMerges } from './lib/audit.js';
+import { auditHealth, auditSummary, groupDuplicates, planAutoMerges, buildRecallTest, recallTestSummary } from './lib/audit.js';
 import { collapseNearDuplicates, applyExposureBalance, rankDocs } from './lib/search.js';
 import { createRecall } from './lib/recall.js';
 import { createRecallDedupe } from './lib/recall-dedupe.js';
@@ -173,6 +173,40 @@ console.log('\nF 自动合并与撤销（临时副本）');
   } finally {
     rmSync(dir3, { recursive: true, force: true });
   }
+}
+
+// ---------- G 记忆测试卡（召回质量抽检） ----------
+console.log('\nG 记忆测试卡（真实库只读）');
+{
+  const t0 = Date.now();
+  const test = buildRecallTest(records, { sampleSize: 10, minAgeDays: 90, topK: 3 });
+  const cost = Date.now() - t0;
+  console.log(`  ${recallTestSummary(test)}`);
+  ok(test.total === Math.min(10, test.poolSize), '抽题数符合样本量', `${test.total} / 池 ${test.poolSize}`);
+  ok(test.hit + test.half + test.miss === test.total, '每条考题都有判定', `${test.hit}+${test.half}+${test.miss}=${test.total}`);
+  ok(test.score >= 0 && test.score <= 100, '得分在 0~100', `${test.score}`);
+  ok(cost < 3000, '测试卡耗时在 3 秒内', `${cost}ms`);
+  ok(test.items.every((i) => i.hint && i.hint.length < String(i.answer).length), '每条提示都是答案的前半段');
+  ok(test.items.every((i) => ['hit', 'half', 'miss'].includes(i.verdict)), '判定值合法');
+  const missItems = test.items.filter((i) => i.verdict === 'miss');
+  if (missItems.length > 0) {
+    console.log(`  记错样例：`);
+    for (const m of missItems.slice(0, 3)) {
+      console.log(`    - 提示「${m.hint}」→ 答案「${String(m.answer).slice(0, 50)}」→ 排第 ${m.rank || '—'} 名`);
+    }
+  }
+}
+
+// ---------- H 记忆测试卡接线 ----------
+console.log('\nH 测试卡接线');
+{
+  const routes = readFileSync(new URL('./lib/routes.js', import.meta.url), 'utf-8');
+  const tools = readFileSync(new URL('./lib/tools.js', import.meta.url), 'utf-8');
+  const client = readFileSync(new URL('./lib/client.js', import.meta.url), 'utf-8');
+  ok(routes.includes("'/api-memory/recall-test'"), '路由 /api-memory/recall-test 已注册');
+  ok(tools.includes('buildRecallTest'), '工具 memory_audit 接到测试卡');
+  ok(client.includes('runRecallTest'), '设置页「召回质量测试卡」已接入');
+  ok(client.includes('/api-memory/recall-test'), '设置页调用了测试卡接口');
 }
 
 console.log(`\n${failed === 0 ? '✅ 全部通过' : `❌ ${failed} 项失败`}`);
