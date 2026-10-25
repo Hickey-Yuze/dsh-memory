@@ -46,6 +46,11 @@ function startFakeGitHub() {
       res.writeHead(code, { 'content-type': 'application/json' });
       res.end(body);
     };
+    // raw media type：直接回字节（对应真实 GitHub 的 application/vnd.github.raw）
+    const sendRaw = (code, buf) => {
+      res.writeHead(code, { 'content-type': 'application/octet-stream' });
+      res.end(buf);
+    };
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const raw = Buffer.concat(chunks);
@@ -63,6 +68,7 @@ function startFakeGitHub() {
       const entry = t && t.tree.find((e) => e.path === path);
       if (!entry) return send(404, { message: 'Not Found' });
       const buf = blobs.get(entry.sha);
+      if (String(req.headers.accept || '').includes('application/vnd.github.raw')) return sendRaw(200, buf);
       return send(200, {
         type: 'file', path, sha: entry.sha, size: buf.length,
         encoding: 'base64', content: buf.toString('base64'),
