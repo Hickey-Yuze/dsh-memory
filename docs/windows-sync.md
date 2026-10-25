@@ -24,7 +24,7 @@ GitHub → **New repository**
 
 - 名字：`dsh-memory-sync`（随意，后面填进配置的是 `owner/repo`）
 - 可见性：**Private**
-- 勾 **Add a README file**（让 `main` 分支一开始就存在，少一个排错分支）
+- 勾 **Add a README file**（推荐；不勾也行，插件在空仓库上会自动创建 `main` 分支）
 
 建完记下 `owner/repo`，例如 `Hickey-Yuze/dsh-memory-sync`。
 
@@ -221,9 +221,9 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.dsh\profiles\<PROFILE>\node
 - 仓库名写成 `https://github.com/owner/repo` → 只填 `owner/repo`
 - 分支写错（默认 `main`，老仓库可能是 `master`）
 
-**② 点上传报 `Branch main not found` 之类**
+**② 点上传报 `Update is not a fast forward`**
 
-远端仓库是空的、连 initial commit 都没有。去 GitHub 建个 README 提交一次，或直接在仓库里手动建 `memory-sync/` 目录提交一次，让分支存在。
+插件版本太旧（< 0.1.x 修复版）：远端已有 README 等提交时，旧版上传的 commit 没有父级，被 GitHub 拒绝。升级到含 `fix(sync): 上传接上远端既有提交` 的版本即可。临时绕法：删掉远端 `main` 分支再上传。
 
 **③ 设置页压根看不到「记忆」分区**
 
