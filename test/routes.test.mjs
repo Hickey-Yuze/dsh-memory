@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { registerRoutes } from '../lib/routes.js';
 import { createStore } from '../lib/store.js';
 import { createConfig } from '../lib/config.js';
+import { createExporter } from '../lib/export.js';
 
 function silentLog() {
   return { debug() {}, info() {}, warn() {}, error() {}, tail: () => ['line-1', 'line-2'], errors: () => [{ ts: Date.now(), message: 'boom' }], lastError: () => ({ ts: Date.now(), message: 'boom' }) };
@@ -42,7 +43,8 @@ function setup(t) {
     },
   };
   let currentRegister = [];
-  registerRoutes(ctx, { store, pipeline, config, log, dataDir: dir });
+  const exporter = createExporter({ store, config, log, dataDir: dir });
+  registerRoutes(ctx, { store, pipeline, config, log, dataDir: dir, exporter });
   const routes = Object.fromEntries(registered.map((r) => [r.path, r.handler]));
   return { store, routes, dir };
 }
@@ -106,8 +108,7 @@ test('config 读写 + 节级覆盖', async (t) => {
   assert.equal(reread.body.overlay.recall.maxResults, 3);
 });
 
-test('rebuild / records/delete / wipe', async (t) => {
-  const { store, routes } = await setup(t);
+test('rebuild / records/delete / wipe', async (t) => {  const { store, routes } = await setup(t);
   const rec = store.upsertRecord({ content: 'to-delete' }).record;
   const status = await callGet(routes['/api-memory/rebuild']);
   assert.equal(status.body.status.busy, false);
@@ -118,6 +119,34 @@ test('rebuild / records/delete / wipe', async (t) => {
   assert.equal(wipe.body.ok, true);
   const bad = await callPost(routes['/api-memory/records/delete'], {});
   assert.equal(bad.body.ok, false);
+});
+
+test('export：status + 手动触发导出', async (t) => {
+  const { store, routes, dir } = await setup(t);
+  // 未配置目标目录 → status 返回配置为空，run 返回错误
+  const st0 = await callGet(routes['/api-memory/export']);
+  assert.equal(st0.body.status.enabled, false);
+  const run0 = await callPost(routes['/api-memory/export'], {});
+  assert.equal(run0.body.ok, false);
+  assert.match(run0.body.error, /导出目录/);
+});
+
+test('export：配置 targetDir 后手动导出成功', async (t) => {
+  const { store, routes, dir } = await setup(t);
+  const targetDir = mkdtempSync(join(tmpdir(), 'dsh-mem-export-route-'));
+  t.after(() => rmSync(targetDir, { recursive: true, force: true }));
+  const cfgWrite = await callPost(routes['/api-memory/config'], { export: { enabled: true, cron: '0 3 * * *', targetDir } });
+  assert.equal(cfgWrite.body.ok, true);
+  const r1 = store.upsertRecord({ content: '路由导出测试记忆', family: 'work', kind: 'fact' });
+  store.replaceScenes([{ id: 's1', family: 'work', title: '路由测试', content: '', recordIds: [r1.record.id] }], 'work');
+  const run = await callPost(routes['/api-memory/export'], {});
+  assert.equal(run.body.ok, true);
+  assert.equal(run.body.files, 1);
+  assert.equal(run.body.records, 1);
+  const st = await callGet(routes['/api-memory/export']);
+  assert.equal(st.body.status.enabled, true);
+  assert.equal(st.body.status.cron, '0 3 * * *');
+  assert.ok(st.body.status.lastExportAt > 0);
 });
 
 // ============ 写操作守卫：跨站请求不能清库 ============
