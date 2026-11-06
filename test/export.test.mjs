@@ -108,20 +108,22 @@ test('归类：非法文件名清理', () => {
 
 // ---------- md 渲染 ----------
 
-test('渲染：含精华与记忆列表', () => {
+test('渲染：结构化文档（frontmatter + 提炼正文 + 支撑记忆）', () => {
   const md = renderSceneMd(
     { id: 's1', title: '测试场景', family: 'work' },
     [
       { content: '第一条记忆', kind: 'fact', updatedAt: 1700000000000 },
       { content: '推测内容', kind: 'opinion', updatedAt: 1700000001000 },
     ],
-    '精华摘要正文',
+    '## 要点\n\n- **关键决策**：测试决策',
     '团队工作准则',
   );
+  assert.ok(md.includes('title: 测试场景'));
+  assert.ok(md.includes('type: knowledge'));
   assert.ok(md.includes('# 测试场景'));
-  assert.ok(md.includes('## 精华'));
-  assert.ok(md.includes('精华摘要正文'));
-  assert.ok(md.includes('## 记忆'));
+  assert.ok(md.includes('## 要点'));
+  assert.ok(md.includes('**关键决策**'));
+  assert.ok(md.includes('## 支撑记忆'));
   assert.ok(md.includes('第一条记忆'));
   assert.ok(md.includes('（推测）'));
 });
