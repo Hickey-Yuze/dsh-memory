@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -382,6 +383,33 @@ async function main() {
     assert.ok(gz < 2 * 1024 * 1024, `gz=${gz}`);
   });
 
+  section('⑧ 走代理同步（http CONNECT 隧道 + socks5）');
+  // 本地起两个假代理：http CONNECT 隧道代理 + socks5 代理，目标都是 mock GitHub
+  const httpProxy = await startConnectProxy();
+  const socks5 = await startSocks5Proxy();
+  // http 代理：downloadSnapshot 应能透过隧道拿到远端快照
+  const proxyCfg = { sync: { ...cfg.sync, proxy: `http://127.0.0.1:${httpProxy.port}` } };
+  const proxied = await downloadSnapshot(proxyCfg);
+  check('http CONNECT 代理：远端快照可下载并解码', () => {
+    assert.ok(proxied && proxied.records.length >= 3, '走代理应拿到远端快照');
+    assert.ok(proxied.records.some((r) => /黄金矿工/.test(r.content)));
+  });
+  // 上传也走代理
+  const snapA4 = buildSnapshot(storeA, dirA, { deviceId: devA, deviceName: 'Mac mini' });
+  const upP = await uploadSnapshot(proxyCfg, snapA4, { deviceId: devA, deviceName: 'Mac mini' });
+  check('http CONNECT 代理：上传成功（走代理的写路径）', () => {
+    assert.ok(upP.commitSha && upP.commitSha.length >= 7);
+  });
+  // socks5 代理
+  const socksCfg = { sync: { ...cfg.sync, proxy: `socks5://127.0.0.1:${socks5.port}` } };
+  const socksProxied = await downloadSnapshot(socksCfg);
+  check('socks5 代理：远端快照可下载并解码', () => {
+    assert.ok(socksProxied && socksProxied.records.length >= 3, '走 socks5 应拿到远端快照');
+    assert.ok(socksProxied.records.some((r) => /黄金矿工/.test(r.content)));
+  });
+  httpProxy.close();
+  socks5.close();
+
   gh.server.close();
   rmSync(dirA, { recursive: true, force: true });
   rmSync(dirB, { recursive: true, force: true });
@@ -396,6 +424,87 @@ async function main() {
 
 function require_gz(snapshot) {
   return encodeSnapshot(snapshot).length;
+}
+
+/** 本地 http CONNECT 隧道代理：收到 CONNECT host:port → 连目标 → 双向透传。 */
+function startConnectProxy() {
+  return new Promise((resolve) => {
+    const server = net.createServer((socket) => {
+      socket.once('data', (d) => {
+        const head = d.toString('latin1');
+        const m = /^CONNECT\s+([^:\s]+):(\d+)\s+HTTP\/1\.[01]/i.exec(head);
+        if (!m) { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); return; }
+        const target = net.connect(Number(m[2]), m[1], () => {
+          socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+          target.pipe(socket);
+          socket.pipe(target);
+        });
+        target.on('error', () => { socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'); });
+        socket.on('error', () => target.destroy());
+      });
+      socket.on('error', () => { /* 客户端断连 */ });
+    });
+    server.listen(0, '127.0.0.1', () => resolve({
+      port: server.address().port,
+      close: () => server.close(),
+    }));
+  });
+}
+
+/** 本地 socks5 代理（RFC1928，NO AUTH + CONNECT）：完整握手 + 双向透传。 */
+function startSocks5Proxy() {
+  return new Promise((resolve) => {
+    const server = net.createServer((socket) => {
+      let state = 'greeting';
+      socket.on('data', (d) => {
+        if (state === 'greeting') {
+          // 客户端发：VER=5 NMETHODS=1 METHOD=0
+          if (d.length >= 3 && d[0] === 5) {
+            socket.write(Buffer.from([5, 0])); // 回复 05 00 (NO AUTH)
+            state = 'request';
+          } else {
+            socket.end();
+          }
+          return;
+        }
+        if (state === 'request') {
+          // 客户端发：VER=5 CMD=1 RSV=0 ATYP(1=ipv4/3=domain) ADDR PORT
+          if (d.length < 7 || d[0] !== 5 || d[1] !== 1) { socket.end(); return; }
+          let host, port, headerLen;
+          const atyp = d[3];
+          if (atyp === 1) {
+            if (d.length < 10) { socket.end(); return; }
+            host = `${d[4]}.${d[5]}.${d[6]}.${d[7]}`;
+            port = d.readUInt16BE(8);
+            headerLen = 10;
+          } else if (atyp === 3) {
+            const len = d[4];
+            if (d.length < 7 + len) { socket.end(); return; }
+            host = d.subarray(5, 5 + len).toString('utf-8');
+            port = d.readUInt16BE(5 + len);
+            headerLen = 7 + len;
+          } else { socket.end(); return; }
+          const target = net.connect(port, host, () => {
+            // 回复：VER=5 REP=0 RSV=0 ATYP=1 0.0.0.0:0
+            socket.write(Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]));
+            target.pipe(socket);
+            socket.pipe(target);
+          });
+          target.on('error', () => {
+            socket.write(Buffer.from([5, 5, 0, 1, 0, 0, 0, 0, 0, 0])); // REP=5 拒绝
+            socket.end();
+          });
+          socket.on('error', () => target.destroy());
+          state = 'done';
+        }
+      });
+      socket.on('error', () => { /* 客户端断连 */ });
+    });
+    server.listen(0, '127.0.0.1', () => resolve({
+      port: server.address().port,
+      close: () => server.close(),
+    }));
+  });
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
