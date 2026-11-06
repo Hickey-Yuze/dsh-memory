@@ -9,6 +9,7 @@ import http from 'node:http';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { deflateRawSync, crc32 } from 'node:zlib';
 import { createStore } from './lib/store.js';
 import { buildSnapshot, mergeSnapshots, uploadSnapshot, downloadSnapshot, applySnapshot, resolveDeviceId, recordTombstone, encodeSnapshot } from './lib/sync.js';
 
@@ -51,11 +52,88 @@ function startFakeGitHub() {
       res.writeHead(code, { 'content-type': 'application/octet-stream' });
       res.end(buf);
     };
+    // 把当前 ref 的整棵树打成 codeload 风格的 zip 归档（目录前缀 = repo-branch）
+    const zipArchive = (branch) => {
+      const head = refs.get(`heads/${branch}`);
+      if (!head) return null;
+      const t = treeOf(head);
+      if (!t) return null;
+      const files = [];
+      for (const e of t.tree || []) {
+        if (e.type !== 'blob') continue;
+        files.push({ name: `dsh-memory-sync-${branch}/${e.path}`, buf: blobs.get(e.sha) });
+      }
+      // 纯 Node zip 打包（deflate + crc32），与真实 codeload 输出结构一致
+      const locals = [];
+      const centrals = [];
+      let offset = 0;
+      for (const f of files) {
+        const nameBuf = Buffer.from(f.name, 'utf-8');
+        const comp = deflateRawSync(f.buf);
+        const crc = crc32(f.buf);
+        const local = Buffer.alloc(30);
+        local.writeUInt32LE(0x04034b50, 0);   // local file header sig
+        local.writeUInt16LE(20, 4);           // version needed
+        local.writeUInt16LE(0, 6);            // flags
+        local.writeUInt16LE(8, 8);            // method = deflate
+        local.writeUInt16LE(0, 10);           // mod time
+        local.writeUInt16LE(0x21, 12);        // mod date
+        local.writeUInt32LE(crc, 14);
+        local.writeUInt32LE(comp.length, 18); // compressed size
+        local.writeUInt32LE(f.buf.length, 22); // uncompressed size
+        local.writeUInt16LE(nameBuf.length, 26);
+        local.writeUInt16LE(0, 28);           // extra len
+        const localFull = Buffer.concat([local, nameBuf, comp]);
+        locals.push(localFull);
+        const central = Buffer.alloc(46);
+        central.writeUInt32LE(0x02014b50, 0); // central dir sig
+        central.writeUInt16LE(20, 4);         // version made by
+        central.writeUInt16LE(20, 6);         // version needed
+        central.writeUInt16LE(0, 8);          // flags
+        central.writeUInt16LE(8, 10);         // method
+        central.writeUInt16LE(0, 12);         // mod time
+        central.writeUInt16LE(0x21, 14);      // mod date
+        central.writeUInt32LE(crc, 16);
+        central.writeUInt32LE(comp.length, 20);
+        central.writeUInt32LE(f.buf.length, 24);
+        central.writeUInt16LE(nameBuf.length, 28);
+        central.writeUInt16LE(0, 30);         // extra len
+        central.writeUInt16LE(0, 32);         // comment len
+        central.writeUInt16LE(0, 34);         // disk start
+        central.writeUInt16LE(0, 36);         // internal attrs
+        central.writeUInt32LE(0, 38);         // external attrs
+        central.writeUInt32LE(offset, 42);    // local header offset
+        centrals.push(Buffer.concat([central, nameBuf]));
+        offset += localFull.length;
+      }
+      const centralStart = offset;
+      const centralBuf = Buffer.concat(centrals);
+      const eocd = Buffer.alloc(22);
+      eocd.writeUInt32LE(0x06054b50, 0);      // EOCD sig
+      eocd.writeUInt16LE(0, 4);               // disk
+      eocd.writeUInt16LE(0, 6);               // cd disk
+      eocd.writeUInt16LE(files.length, 8);    // entries on disk
+      eocd.writeUInt16LE(files.length, 10);   // total entries
+      eocd.writeUInt32LE(centralBuf.length, 12);
+      eocd.writeUInt32LE(centralStart, 16);
+      eocd.writeUInt16LE(0, 20);              // comment len
+      return Buffer.concat([...locals, centralBuf, eocd]);
+    };
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const raw = Buffer.concat(chunks);
     let body = {};
     try { body = raw.length ? JSON.parse(raw.toString('utf-8')) : {}; } catch { /* ignore */ }
+
+    // GET /:owner/:repo/zip/refs/heads/:branch（codeload 归档通道，下载快照用）
+    const zipMatch = url.pathname.match(/^\/[^/]+\/[^/]+\/zip\/refs\/heads\/(.+)$/);
+    if (zipMatch && req.method === 'GET') {
+      const zip = zipArchive(decodeURIComponent(zipMatch[1]));
+      if (!zip) return send(404, { message: 'Not Found' });
+      res.writeHead(200, { 'content-type': 'application/zip' });
+      res.end(zip);
+      return;
+    }
 
     // GET /repos/:o/:r/contents/:path?ref=branch
     let m = url.pathname.match(/^\/repos\/[^/]+\/[^/]+\/contents\/(.+)$/);
