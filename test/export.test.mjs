@@ -138,13 +138,13 @@ test('导出器：配置缺失返回错误', async () => {
   assert.match(result.error, /导出目录/);
 });
 
-test('导出器：全量导出 + 自动归类 + 增量跳过', async (t) => {
+test('导出器：全量导出（按项目合并）+ 增量跳过 + 增量重生成', async (t) => {
   await withStore(t, async (store, dir) => {
     const targetDir = mkdtempSync(join(tmpdir(), 'dsh-mem-export-target-'));
     t.after(() => rmSync(targetDir, { recursive: true, force: true }));
     const cfg = { effective: () => ({ export: { enabled: true, cron: '', targetDir } }) };
 
-    // 造两个场景 + 成员记忆
+    // 造两个场景 + 成员记忆（无 LLM → 规则降级：场景标题作项目名）
     const r1 = store.upsertRecord({ content: '黄金矿工项目推进', family: 'work', kind: 'fact' });
     const r2 = store.upsertRecord({ content: '钉钉日报配置', family: 'work', kind: 'commitment' });
     const scenes = [
@@ -159,20 +159,23 @@ test('导出器：全量导出 + 自动归类 + 增量跳过', async (t) => {
     assert.equal(first.files, 2);
     assert.equal(first.scenes, 2);
 
-    // 目录结构：targetDir/游戏开发/<日期>.md + targetDir/钉钉配置/<日期>.md
+    // 目录结构：targetDir/<项目>/README.md + 根目录总索引
     const subDirs = readdirSync(targetDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
     assert.ok(subDirs.includes('游戏开发'));
     assert.ok(subDirs.includes('钉钉配置'));
-    const md = readFileSync(join(targetDir, '游戏开发', `${new Date().toISOString().slice(0, 10)}.md`), 'utf-8');
+    const md = readFileSync(join(targetDir, '游戏开发', 'README.md'), 'utf-8');
     assert.ok(md.includes('# 游戏开发'));
     assert.ok(md.includes('黄金矿工项目推进'));
+    const indexMd = readFileSync(join(targetDir, 'README.md'), 'utf-8');
+    assert.ok(indexMd.includes('游戏开发'));
+    assert.ok(indexMd.includes('钉钉配置'));
 
     // 增量：没有新内容 → 第二次跳过
     const second = await exporter.runExport();
     assert.equal(second.skipped, true);
     assert.equal(second.files, 0);
 
-    // 新增记忆进已有场景 → 增量导出
+    // 新增记忆进已有场景 → 增量只重生成该项目文档
     await new Promise((r) => setTimeout(r, 5)); // 确保 updatedAt > lastExportAt（同毫秒竞态）
     const nr = store.upsertRecord({ content: '黄金矿工新增关卡', family: 'work', kind: 'fact' });
     const s1 = store.getScenes('work').find((s) => s.title === '游戏开发');
@@ -183,11 +186,11 @@ test('导出器：全量导出 + 自动归类 + 增量跳过', async (t) => {
   });
 });
 
-test('导出器：归类到已有子目录（语义匹配）', async (t) => {
+test('导出器：归类到已有项目目录（语义匹配，不新建）', async (t) => {
   await withStore(t, async (store, dir) => {
     const targetDir = mkdtempSync(join(tmpdir(), 'dsh-mem-export-target-'));
     t.after(() => rmSync(targetDir, { recursive: true, force: true }));
-    // 预先建好一个目录（模拟知识库已有结构：项目/报告/配置）
+    // 预先建好一个目录（模拟知识库已有结构：项目）
     const { mkdirSync } = await import('node:fs');
     mkdirSync(join(targetDir, '项目'), { recursive: true });
     const cfg = { effective: () => ({ export: { enabled: true, cron: '', targetDir } }) };
@@ -195,9 +198,9 @@ test('导出器：归类到已有子目录（语义匹配）', async (t) => {
     store.replaceScenes([{ id: 's1', family: 'work', title: '游戏开发项目', content: '', recordIds: [r1.record.id] }], 'work');
     const exporter = createExporter({ store, config: cfg, log: silentLog(), dataDir: dir });
     await exporter.runExport();
-    // 场景名「游戏开发项目」包含「项目」→ 应归入已有「项目」目录，不新建
+    // 场景「游戏开发项目」与已有「项目」目录字符重叠 ≥2 → 归入「项目」，不新建场景目录
     const inProject = readdirSync(join(targetDir, '项目'));
-    assert.ok(inProject.length > 0);
+    assert.ok(inProject.includes('README.md'));
     const subDirs = readdirSync(targetDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
     assert.ok(!subDirs.includes('游戏开发项目')); // 没有新建场景目录
   });
