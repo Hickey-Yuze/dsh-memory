@@ -165,7 +165,8 @@ test('导出器：全量导出（按项目合并）+ 增量跳过 + 增量重生
     assert.ok(subDirs.includes('钉钉配置'));
     const md = readFileSync(join(targetDir, '游戏开发', 'README.md'), 'utf-8');
     assert.ok(md.includes('# 游戏开发'));
-    assert.ok(md.includes('黄金矿工项目推进'));
+    // 规则降级（无 LLM）时正文为空，统计行仍应正确
+    assert.ok(md.includes('1 个场景｜1 条记忆'));
     const indexMd = readFileSync(join(targetDir, 'README.md'), 'utf-8');
     assert.ok(indexMd.includes('游戏开发'));
     assert.ok(indexMd.includes('钉钉配置'));
