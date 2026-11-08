@@ -159,11 +159,11 @@ test('导出器：全量导出（按项目合并）+ 增量跳过 + 增量重生
     assert.equal(first.files, 2);
     assert.equal(first.scenes, 2);
 
-    // 目录结构：targetDir/<项目>/README.md + 根目录总索引
+    // 目录结构：targetDir/<项目>/<项目名>.md + 根目录总索引
     const subDirs = readdirSync(targetDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
     assert.ok(subDirs.includes('游戏开发'));
     assert.ok(subDirs.includes('钉钉配置'));
-    const md = readFileSync(join(targetDir, '游戏开发', 'README.md'), 'utf-8');
+    const md = readFileSync(join(targetDir, '游戏开发', '游戏开发.md'), 'utf-8');
     assert.ok(md.includes('# 游戏开发（PRD）'));
     // 规则降级（无 LLM）时正文为空，统计行仍应正确
     assert.ok(md.includes('记忆源：1 个场景 / 1 条记忆'));
@@ -201,7 +201,7 @@ test('导出器：归类到已有项目目录（语义匹配，不新建）', as
     await exporter.runExport();
     // 场景「游戏开发项目」与已有「项目」目录字符重叠 ≥2 → 归入「项目」，不新建场景目录
     const inProject = readdirSync(join(targetDir, '项目'));
-    assert.ok(inProject.includes('README.md'));
+    assert.ok(inProject.some((f) => f === '项目.md'));
     const subDirs = readdirSync(targetDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
     assert.ok(!subDirs.includes('游戏开发项目')); // 没有新建场景目录
   });
@@ -240,7 +240,7 @@ test('导出器：单项目导出只写指定项目，不动索引/state', async
     assert.equal(result.ok, true);
     assert.equal(result.projects, 1);
     // 只写了甲项目
-    const md = readFileSync(join(targetDir, '甲项目', 'README.md'), 'utf-8');
+    const md = readFileSync(join(targetDir, '甲项目', '甲项目.md'), 'utf-8');
     assert.ok(md.includes('# 甲项目（PRD）'));
     const subDirs = readdirSync(targetDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
     assert.ok(!subDirs.includes('乙项目')); // 乙项目未导出
