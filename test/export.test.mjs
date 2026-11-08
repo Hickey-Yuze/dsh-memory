@@ -2,7 +2,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStore } from '../lib/store.js';
@@ -164,9 +164,9 @@ test('导出器：全量导出（按项目合并）+ 增量跳过 + 增量重生
     assert.ok(subDirs.includes('游戏开发'));
     assert.ok(subDirs.includes('钉钉配置'));
     const md = readFileSync(join(targetDir, '游戏开发', 'README.md'), 'utf-8');
-    assert.ok(md.includes('# 游戏开发'));
+    assert.ok(md.includes('# 游戏开发（PRD）'));
     // 规则降级（无 LLM）时正文为空，统计行仍应正确
-    assert.ok(md.includes('1 个场景｜1 条记忆'));
+    assert.ok(md.includes('记忆源：1 个场景 / 1 条记忆'));
     const indexMd = readFileSync(join(targetDir, 'README.md'), 'utf-8');
     assert.ok(indexMd.includes('游戏开发'));
     assert.ok(indexMd.includes('钉钉配置'));
@@ -217,6 +217,36 @@ test('导出器：status 返回配置与上次结果', async (t) => {
     assert.equal(st.enabled, true);
     assert.equal(st.cron, '0 3 * * *');
     assert.equal(st.targetDir, targetDir);
+    assert.equal(st.lastExportAt, 0);
+  });
+});
+
+test('导出器：单项目导出只写指定项目，不动索引/state', async (t) => {
+  await withStore(t, async (store, dir) => {
+    const targetDir = mkdtempSync(join(tmpdir(), 'dsh-mem-export-target-'));
+    t.after(() => rmSync(targetDir, { recursive: true, force: true }));
+    const cfg = { effective: () => ({ export: { enabled: true, cron: '', targetDir } }) };
+    const r1 = store.upsertRecord({ content: '甲项目推进', family: 'work', kind: 'fact' });
+    const r2 = store.upsertRecord({ content: '乙项目推进', family: 'work', kind: 'fact' });
+    store.replaceScenes([
+      { id: 's1', family: 'work', title: '甲相关', content: '', recordIds: [r1.record.id] },
+      { id: 's2', family: 'work', title: '乙相关', content: '', recordIds: [r2.record.id] },
+    ], 'work');
+    // 预置 project-map：用实际生成的场景 id 映射到不同项目
+    const realScenes = store.getScenes();
+    writeFileSync(join(dir, 'project-map.json'), JSON.stringify({ [realScenes[0].id]: '甲项目', [realScenes[1].id]: '乙项目' }));
+    const exporter = createExporter({ store, config: cfg, log: silentLog(), dataDir: dir });
+    const result = await exporter.runExportAsync({ project: '甲项目' });
+    assert.equal(result.ok, true);
+    assert.equal(result.projects, 1);
+    // 只写了甲项目
+    const md = readFileSync(join(targetDir, '甲项目', 'README.md'), 'utf-8');
+    assert.ok(md.includes('# 甲项目（PRD）'));
+    const subDirs = readdirSync(targetDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+    assert.ok(!subDirs.includes('乙项目')); // 乙项目未导出
+    // 不写总索引、不更新 lastExportAt
+    assert.ok(!existsSync(join(targetDir, 'README.md')));
+    const st = exporter.status();
     assert.equal(st.lastExportAt, 0);
   });
 });
