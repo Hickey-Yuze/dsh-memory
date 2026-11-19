@@ -149,6 +149,25 @@ test('export：配置 targetDir 后手动导出成功', async (t) => {
   assert.ok(st.body.status.lastExportAt > 0);
 });
 
+test('sync/test-proxy：空参数 / 非法格式 / 解析结果', async (t) => {
+  const { routes } = await setup(t);
+  // 空参数 → 400
+  const empty = await callGet(routes['/api-memory/sync/test-proxy']);
+  assert.equal(empty.status, 400);
+  assert.equal(empty.body.ok, false);
+  assert.match(empty.body.error, /未填写代理地址/);
+  // 非法格式 → 400
+  const bad = await callGet(routes['/api-memory/sync/test-proxy'], '?proxy=abc://x');
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /无法解析代理地址/);
+  // 合法格式但连不上（本机无该代理）→ 返回 ok:false 且带错误与 ms
+  const noConn = await callGet(routes['/api-memory/sync/test-proxy'], '?proxy=socks5://127.0.0.1:1');
+  assert.equal(noConn.body.ok, false);
+  assert.match(noConn.body.error, /代理连接失败|代理连通/);
+  assert.equal(noConn.body.kind, 'socks5');
+  assert.ok(noConn.body.ms != null);
+});
+
 // ============ 写操作守卫：跨站请求不能清库 ============
 
 import { mutationAllowed, MUTATION_HEADER } from '../lib/routes.js';
