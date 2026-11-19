@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeVersion, compareVersions, checkUpdate, resetUpdateCache } from '../lib/version.js';
-import { findRepoRoot, applyUpdate, MANUAL_UPDATE_CMD } from '../lib/updater.js';
+import { findRepoRoot, applyUpdate, canAutoRestart, relaunchHost, MANUAL_UPDATE_CMD } from '../lib/updater.js';
 
 test('normalizeVersion：去 v/V 前缀与空白', () => {
   assert.equal(normalizeVersion('v0.2.0'), '0.2.0');
@@ -59,4 +59,14 @@ test('applyUpdate：git 检出但 pull 失败（无 remote）返回错误日志'
   assert.equal(r.ok, false);
   assert.equal(r.stage, 'pull');
   assert.equal(typeof r.log, 'string');
+});
+
+test('canAutoRestart：裸 Node（非宿主 Electron）环境返回 false', async () => {
+  // 测试进程没有 electron 模块 → 自动重启不可用，降级为手动重启提示。
+  assert.equal(await canAutoRestart(), false);
+});
+
+test('relaunchHost：裸 Node 环境静默返回 false 不抛错', async () => {
+  // 非 Electron 环境 relaunch 失败应静默，绝不让一键更新报错。
+  assert.equal(await relaunchHost(), false);
 });
