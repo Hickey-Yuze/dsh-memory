@@ -115,11 +115,39 @@ test('sync/status：含定时上传/同步 cron 字段', async (t) => {
   assert.equal(st0.body.uploadCron, '');
   assert.equal(st0.body.downloadCron, '');
   // 写入 cron 后 status 回显
-  const w = await callPost(routes['/api-memory/config'], { sync: { enabled: true, repo: 'h/y', token: 't', uploadCron: '0 4 * * *', downloadCron: '30 4 * * *' } });
+  const w = await callPost(routes['/api-memory/config'], { sync: { enabled: true, repo: 'h/y', token: 't', uploadCron: '0 4 * * *', downloadCron: '30 4 * * 0' } });
   assert.equal(w.body.ok, true);
   const st1 = await callGet(routes['/api-memory/sync/status']);
   assert.equal(st1.body.uploadCron, '0 4 * * *');
-  assert.equal(st1.body.downloadCron, '30 4 * * *');
+  assert.equal(st1.body.downloadCron, '30 4 * * 0');
+  // 下次执行时间：每天 04:00 / 每周日 04:30
+  assert.equal(typeof st1.body.nextUpload, 'number');
+  assert.equal(st1.body.nextUploadText, '每天 04:00');
+  assert.equal(st1.body.nextDownloadText, '每周 日 04:30');
+  assert.equal(st1.body.nextUploadError, null);
+  assert.equal(st1.body.nextDownloadError, null);
+});
+
+test('sync/status：非法 cron 返回错误提示', async (t) => {
+  const { routes } = await setup(t);
+  const w = await callPost(routes['/api-memory/config'], { sync: { enabled: true, repo: 'h/y', token: 't', uploadCron: '99 4 * * *' } });
+  assert.equal(w.body.ok, true);
+  const st1 = await callGet(routes['/api-memory/sync/status']);
+  assert.equal(st1.body.nextUpload, null);
+  assert.ok(st1.body.nextUploadError, '非法 cron 应返回错误文案');
+});
+
+test('cron/next：实时预览下次执行时间', async (t) => {
+  const { routes } = await setup(t);
+  const ok = await callGet(routes['/api-memory/cron/next'], '?expr=' + encodeURIComponent('3 23 * * *'));
+  assert.equal(ok.body.ok, true);
+  assert.equal(typeof ok.body.at, 'number');
+  assert.equal(ok.body.text, '每天 23:03');
+  const bad = await callGet(routes['/api-memory/cron/next'], '?expr=' + encodeURIComponent('99 23 * * *'));
+  assert.equal(bad.body.ok, false);
+  assert.ok(bad.body.error);
+  const empty = await callGet(routes['/api-memory/cron/next']);
+  assert.equal(empty.body.ok, false);
 });
 
 test('config 节内合并：token 不被未提交字段覆盖清空', async (t) => {
