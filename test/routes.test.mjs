@@ -108,6 +108,20 @@ test('config 读写 + 节级覆盖', async (t) => {
   assert.equal(reread.body.overlay.recall.maxResults, 3);
 });
 
+test('sync/status：含定时上传/同步 cron 字段', async (t) => {
+  const { routes } = await setup(t);
+  // 未配置时默认为空
+  const st0 = await callGet(routes['/api-memory/sync/status']);
+  assert.equal(st0.body.uploadCron, '');
+  assert.equal(st0.body.downloadCron, '');
+  // 写入 cron 后 status 回显
+  const w = await callPost(routes['/api-memory/config'], { sync: { enabled: true, repo: 'h/y', token: 't', uploadCron: '0 4 * * *', downloadCron: '30 4 * * *' } });
+  assert.equal(w.body.ok, true);
+  const st1 = await callGet(routes['/api-memory/sync/status']);
+  assert.equal(st1.body.uploadCron, '0 4 * * *');
+  assert.equal(st1.body.downloadCron, '30 4 * * *');
+});
+
 test('rebuild / records/delete / wipe', async (t) => {  const { store, routes } = await setup(t);
   const rec = store.upsertRecord({ content: 'to-delete' }).record;
   const status = await callGet(routes['/api-memory/rebuild']);
