@@ -122,6 +122,23 @@ test('sync/status：含定时上传/同步 cron 字段', async (t) => {
   assert.equal(st1.body.downloadCron, '30 4 * * *');
 });
 
+test('config 节内合并：token 不被未提交字段覆盖清空', async (t) => {
+  const { routes } = await setup(t);
+  // 先写入含 token 的 sync 节
+  const w1 = await callPost(routes['/api-memory/config'], { sync: { enabled: true, repo: 'h/y', token: 'secret-token', uploadCron: '0 4 * * *', downloadCron: '30 4 * * *' } });
+  assert.equal(w1.body.ok, true);
+  // 再写只改 repo（不带 token）——token 必须保留
+  const w2 = await callPost(routes['/api-memory/config'], { sync: { repo: 'h/z' } });
+  assert.equal(w2.body.ok, true);
+  assert.equal(w2.body.overlay.sync.token, 'secret-token', '未提交 token 不应被清空');
+  assert.equal(w2.body.overlay.sync.repo, 'h/z', '已提交字段应更新');
+  assert.equal(w2.body.overlay.sync.uploadCron, '0 4 * * *', '节内合并应保留其他既有字段');
+  // 显式提交空 token 才算清空
+  const w3 = await callPost(routes['/api-memory/config'], { sync: { token: '' } });
+  assert.equal(w3.body.ok, true);
+  assert.equal(w3.body.overlay.sync.token, '', '显式提交空 token 才清空');
+});
+
 test('rebuild / records/delete / wipe', async (t) => {  const { store, routes } = await setup(t);
   const rec = store.upsertRecord({ content: 'to-delete' }).record;
   const status = await callGet(routes['/api-memory/rebuild']);
@@ -133,6 +150,30 @@ test('rebuild / records/delete / wipe', async (t) => {  const { store, routes } 
   assert.equal(wipe.body.ok, true);
   const bad = await callPost(routes['/api-memory/records/delete'], {});
   assert.equal(bad.body.ok, false);
+});
+
+test('update/check：返回当前版本与检查结果（结构完整，远端失败静默 null）', async (t) => {
+  const { routes } = await setup(t);
+  const r = await callGet(routes['/api-memory/update/check']);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ok, true);
+  // value 可能是 null（网络不可用）或 {current, latest, hasUpdate, url}
+  if (r.body.value !== null) {
+    assert.equal(typeof r.body.value.current, 'string');
+    assert.equal(typeof r.body.value.latest, 'string');
+    assert.equal(typeof r.body.value.hasUpdate, 'boolean');
+  }
+});
+
+test('update/apply：返回更新结果结构（非 git 检出返回手动命令）', async (t) => {
+  const { routes } = await setup(t);
+  const r = await callPost(routes['/api-memory/update/apply'], {});
+  assert.equal(r.body.ok, true);
+  assert.equal(typeof r.body.value.ok, 'boolean');
+  assert.equal(typeof r.body.value.changed, 'boolean');
+  assert.equal(typeof r.body.value.needRestart, 'boolean');
+  assert.equal(typeof r.body.value.stage, 'string');
+  assert.equal(typeof r.body.value.log, 'string');
 });
 
 test('export：status + 手动触发导出', async (t) => {
